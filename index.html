@@ -1224,8 +1224,12 @@ function App() {
         booksRef.current = bks || [];
         tombRef.current = tomb || [];
         if (last) setLastSync(last);
-        const useCid = cid || DRIVE_CLIENT_ID;
-        if (useCid) { setClientIdState(useCid); Drive.init(useCid); }
+        const useCid = (DRIVE_CLIENT_ID || cid || "").trim();
+        if (useCid) {
+          setClientIdState(useCid);
+          Drive.init(useCid);
+          if (useCid !== cid) DB.setSetting("driveClientId", useCid); // corrige un ID viejo/roto guardado en este dispositivo
+        }
         if (pref) setPreferDriveState(true);
         if (auto) { setAutoSyncState(true); if (useCid) tryAutoSync(useCid); }
       } catch (e) {
