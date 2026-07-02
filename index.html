@@ -497,14 +497,29 @@ const Drive = (() => {
   }
 
   // Reutiliza el token de la sesión: así solo se abre UNA ventana de permiso por sesión.
-  function getToken() {
+  // silent=true intenta obtenerlo sin popup (si ya diste permiso antes).
+  function getToken(silent) {
     return new Promise((res, rej) => {
       if (accessToken) return res(accessToken);
       if (!tokenClient) return rej(new Error("Google Drive no está configurado. Agrega tu Client ID en Ajustes."));
       pending = { resolve: res, reject: rej };
-      try { tokenClient.requestAccessToken({ prompt: "consent" }); }
+      try { tokenClient.requestAccessToken({ prompt: silent ? "" : "consent" }); }
       catch (e) { pending = null; rej(e); }
     });
+  }
+
+  // Traduce el error real que devuelve la API de Drive a un mensaje claro
+  async function apiErr(r) {
+    let j = null; try { j = await r.json(); } catch (e) {}
+    const m = j && j.error && j.error.message;
+    const reason = j && j.error && j.error.errors && j.error.errors[0] && j.error.errors[0].reason;
+    if (reason === "accessNotConfigured" || (m && /has not been used in project|is disabled/i.test(m)))
+      return "La API de Google Drive no está habilitada en tu proyecto de Google. Actívala en «APIs y servicios → Biblioteca → Google Drive API → Habilitar» (en el MISMO proyecto del Client ID) y espera 1-2 minutos.";
+    if (reason === "insufficientPermissions" || (m && /insufficient authentication scopes/i.test(m)))
+      return "El permiso otorgado no incluye acceso a Drive. Desconecta y vuelve a conectar, aceptando el permiso de archivos.";
+    if (reason === "storageQuotaExceeded" || (m && /quota/i.test(m)))
+      return "Tu Google Drive no tiene espacio disponible.";
+    return "Google Drive respondió " + r.status + (m ? ": " + m : "");
   }
 
   async function ensureFolder() {
@@ -514,6 +529,7 @@ const Drive = (() => {
     const r = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`, {
       headers: { Authorization: "Bearer " + token },
     });
+    if (!r.ok) throw new Error(await apiErr(r));
     const d = await r.json();
     if (d.files && d.files.length) { folderId = d.files[0].id; return folderId; }
     const r2 = await fetch("https://www.googleapis.com/drive/v3/files?fields=id", {
@@ -521,6 +537,7 @@ const Drive = (() => {
       headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
       body: JSON.stringify({ name: DRIVE_FOLDER_NAME, mimeType: "application/vnd.google-apps.folder" }),
     });
+    if (!r2.ok) throw new Error(await apiErr(r2));
     const d2 = await r2.json();
     folderId = d2.id;
     return folderId;
@@ -537,7 +554,7 @@ const Drive = (() => {
     const r = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink,size", {
       method: "POST", headers: { Authorization: "Bearer " + token }, body,
     });
-    if (!r.ok) throw new Error("Error al subir a Drive (" + r.status + ")");
+    if (!r.ok) throw new Error(await apiErr(r));
     return r.json();
   }
 
@@ -546,7 +563,7 @@ const Drive = (() => {
     const r = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
       headers: { Authorization: "Bearer " + token },
     });
-    if (!r.ok) throw new Error("No se pudo descargar de Drive (" + r.status + ")");
+    if (!r.ok) throw new Error(await apiErr(r));
     return r.blob();
   }
 
@@ -559,10 +576,68 @@ const Drive = (() => {
     } catch (e) { /* silencioso: el archivo puede ya no existir */ }
   }
 
+  // --- Sincronización de datos: un único archivo JSON en la carpeta de la app ---
+  const DATA_NAME = "__biblioteca_datos.json";
+  let libFileId = null;
+
+  async function findLibraryFile() {
+    if (libFileId) return libFileId;
+    const token = await getToken();
+    const parent = await ensureFolder();
+    const q = encodeURIComponent(`name='${DATA_NAME}' and '${parent}' in parents and trashed=false`);
+    const r = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,modifiedTime)&orderBy=modifiedTime desc`, {
+      headers: { Authorization: "Bearer " + token },
+    });
+    if (!r.ok) throw new Error(await apiErr(r));
+    const d = await r.json();
+    libFileId = (d.files && d.files[0] && d.files[0].id) || null;
+    return libFileId;
+  }
+
+  async function loadLibrary() {
+    const id = await findLibraryFile();
+    if (!id) return null;
+    const token = await getToken();
+    const r = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`, {
+      headers: { Authorization: "Bearer " + token },
+    });
+    if (!r.ok) throw new Error(await apiErr(r));
+    try { return await r.json(); } catch (e) { return null; }
+  }
+
+  async function saveLibrary(payload) {
+    const token = await getToken();
+    const parent = await ensureFolder();
+    const json = new Blob([JSON.stringify(payload)], { type: "application/json" });
+    const id = await findLibraryFile();
+    if (id) {
+      // Actualiza el contenido del archivo existente
+      const r = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${id}?uploadType=media`, {
+        method: "PATCH", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: json,
+      });
+      if (!r.ok) throw new Error(await apiErr(r));
+      return id;
+    }
+    // Crea el archivo la primera vez
+    const meta = { name: DATA_NAME, parents: [parent] };
+    const boundary = "-------lib" + Date.now();
+    const head = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n`;
+    const tail = `\r\n--${boundary}--`;
+    const body = new Blob([head, json, tail], { type: "multipart/related; boundary=" + boundary });
+    const r = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", {
+      method: "POST", headers: { Authorization: "Bearer " + token }, body,
+    });
+    if (!r.ok) throw new Error(await apiErr(r));
+    const d = await r.json();
+    libFileId = d.id;
+    return libFileId;
+  }
+
   return {
     init, getToken, upload, download, remove, ensureFolder,
+    loadLibrary, saveLibrary,
     ready, isConfigured: () => !!clientId, hasToken: () => !!accessToken,
-    clearToken: () => { accessToken = null; folderId = null; },
+    clearToken: () => { accessToken = null; folderId = null; libFileId = null; },
   };
 })();
 
@@ -757,7 +832,7 @@ function BookForm({ initial, driveEnabled, preferDrive, onSave, onClose, toast }
         }
       }
 
-      const rec = { ...b, title: b.title.trim(), author: b.author.trim(), file };
+      const rec = { ...b, title: b.title.trim(), author: b.author.trim(), file, dateModified: Date.now() };
       await DB.putBook(rec);
       onSave(rec);
       toast(initial ? "Libro actualizado" : "Libro agregado a tu biblioteca", "ok");
@@ -981,9 +1056,11 @@ function BookDetail({ book, onClose, onEdit, onDelete, toast }) {
    AJUSTES — Google Drive + exportar/importar JSON
    ============================================================ */
 function Settings({ clientId, setClientId, driveConnected, connectDrive, disconnectDrive,
-                    preferDrive, setPreferDrive, onExport, onImport, onClose, exporting, importing }) {
+                    preferDrive, setPreferDrive, onExport, onImport, onClose, exporting, importing,
+                    autoSync, setAutoSync, syncing, lastSync, syncNow }) {
   const [cid, setCid] = useState(clientId);
   const importRef = useRef();
+  const lastTxt = lastSync ? new Date(lastSync).toLocaleString("es", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) : null;
 
   return (
     <div className="backdrop" onClick={onClose}>
@@ -1022,6 +1099,31 @@ function Settings({ clientId, setClientId, driveConnected, connectDrive, disconn
                 <span className="sl"></span>
               </label>
             </div>
+          </div>
+
+          <div className="set-block">
+            <h3><Ic.cloud s={18}/> Sincronización entre dispositivos</h3>
+            <p className="desc">Guarda automáticamente tu biblioteca (datos y portadas) en Drive. Al abrir la app en otro celular o navegador, todo aparece solo sin usar JSON. Requiere tener el Client ID configurado arriba.</p>
+            <div className="row-toggle">
+              <div className="rt-txt">
+                <b>Sincronizar automáticamente</b>
+                <span>{autoSync ? (lastTxt ? "Última sincronización: " + lastTxt : "Activada") : "Desactivada"}</span>
+              </div>
+              <label className="switch">
+                <input type="checkbox" checked={autoSync} onChange={e => setAutoSync(e.target.checked)} disabled={!clientId} />
+                <span className="sl"></span>
+              </label>
+            </div>
+            {autoSync && (
+              <div style={{display:"flex", gap:8, flexWrap:"wrap", marginTop:6}}>
+                <button className="btn btn-ghost btn-sm" onClick={syncNow} disabled={syncing}>
+                  {syncing ? <><Ic.loader s={16}/> Sincronizando…</> : <><Ic.cloud s={16}/> Sincronizar ahora</>}
+                </button>
+              </div>
+            )}
+            <p className="muted" style={{fontSize:12, marginTop:12, lineHeight:1.5}}>
+              Para que los EPUB/PDF también se vean en los otros dispositivos, mantén activado «Guardar archivos nuevos en Drive». Los archivos guardados solo localmente no viajan.
+            </p>
           </div>
 
           <div className="set-block">
@@ -1094,7 +1196,15 @@ function App() {
   const [preferDrive, setPreferDriveState] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [autoSync, setAutoSyncState] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
   const [toasts, setToasts] = useState([]);
+
+  const booksRef = useRef(books);
+  useEffect(() => { booksRef.current = books; }, [books]);
+  const tombRef = useRef([]);
+  const syncTimer = useRef(null);
 
   const toast = useCallback((msg, kind = "ok") => {
     const id = uid();
@@ -1106,18 +1216,116 @@ function App() {
   useEffect(() => {
     (async () => {
       try {
-        const [bks, cid, pref] = await Promise.all([
+        const [bks, cid, pref, auto, tomb, last] = await Promise.all([
           DB.getAllBooks(), DB.getSetting("driveClientId"), DB.getSetting("preferDrive"),
+          DB.getSetting("autoSync"), DB.getSetting("tombstones"), DB.getSetting("lastSync"),
         ]);
         setBooks(bks || []);
+        booksRef.current = bks || [];
+        tombRef.current = tomb || [];
+        if (last) setLastSync(last);
         const useCid = cid || DRIVE_CLIENT_ID;
         if (useCid) { setClientIdState(useCid); Drive.init(useCid); }
         if (pref) setPreferDriveState(true);
+        if (auto) { setAutoSyncState(true); if (useCid) tryAutoSync(useCid); }
       } catch (e) {
         toast("No se pudo abrir la base de datos local", "err");
       } finally { setLoaded(true); }
     })();
   }, [toast]);
+
+  // Espera a que cargue el script de Google y sincroniza sin popup (si ya diste permiso antes)
+  async function tryAutoSync(cid) {
+    for (let i = 0; i < 25 && !Drive.ready(); i++) await new Promise(r => setTimeout(r, 200));
+    if (!Drive.ready()) return;
+    if (!Drive.isConfigured()) Drive.init(cid);
+    try { await syncFromDrive({ silent: true }); } catch (e) { /* si no hay sesión activa, se conecta manualmente */ }
+  }
+
+  // ---- Sincronización con Google Drive ----
+  function buildPayload(books, tomb) {
+    return { app: "BibliotecaLeidos", version: 2, updatedAt: new Date().toISOString(), books, deleted: tomb || [] };
+  }
+
+  // Fusiona local y remoto por id (gana la versión más reciente) y aplica borrados (tombstones)
+  function mergeData(localBooks, localTomb, remote) {
+    const remoteBooks = (remote && remote.books) || [];
+    const remoteTomb = (remote && remote.deleted) || [];
+    const tombMap = new Map();
+    [...(localTomb || []), ...remoteTomb].forEach(t => {
+      const p = tombMap.get(t.id);
+      if (!p || (t.at || 0) > (p.at || 0)) tombMap.set(t.id, t);
+    });
+    const bookMap = new Map();
+    const consider = (b) => {
+      if (!b || !b.id) return;
+      const p = bookMap.get(b.id);
+      const bt = b.dateModified || b.dateAdded || 0;
+      const pt = p ? (p.dateModified || p.dateAdded || 0) : -1;
+      if (!p || bt >= pt) bookMap.set(b.id, b);
+    };
+    (localBooks || []).forEach(consider);
+    remoteBooks.forEach(consider);
+    for (const [id, t] of Array.from(tombMap.entries())) {
+      const b = bookMap.get(id);
+      if (!b) continue;
+      const bt = b.dateModified || b.dateAdded || 0;
+      if ((t.at || 0) >= bt) bookMap.delete(id);   // el borrado es más nuevo → se elimina
+      else tombMap.delete(id);                      // el libro se re-editó después → revive
+    }
+    return { books: Array.from(bookMap.values()), tomb: Array.from(tombMap.values()) };
+  }
+
+  async function persistMerged(localBooks, mergedBooks) {
+    const mergedIds = new Set(mergedBooks.map(b => b.id));
+    for (const b of mergedBooks) await DB.putBook(b);
+    for (const b of (localBooks || [])) if (!mergedIds.has(b.id)) await DB.deleteBook(b.id);
+  }
+
+  async function syncFromDrive(opts) {
+    opts = opts || {};
+    if (!Drive.ready()) { if (!opts.silent) toast("Google Drive solo funciona en la app publicada", "err"); return; }
+    setSyncing(true);
+    try {
+      if (!Drive.isConfigured()) Drive.init(clientId);
+      await Drive.getToken(opts.silent);
+      setDriveConnected(true);
+      const remote = await Drive.loadLibrary();
+      const local = booksRef.current;
+      const merged = mergeData(local, tombRef.current, remote);
+      await persistMerged(local, merged.books);
+      tombRef.current = merged.tomb;
+      await DB.setSetting("tombstones", merged.tomb);
+      setBooks(merged.books);
+      booksRef.current = merged.books;
+      await Drive.saveLibrary(buildPayload(merged.books, merged.tomb));
+      const now = Date.now(); setLastSync(now); await DB.setSetting("lastSync", now);
+      if (!opts.silent) toast("Biblioteca sincronizada con Drive", "ok");
+    } catch (e) {
+      if (!opts.silent) toast(e.message || "No se pudo sincronizar", "err");
+    } finally { setSyncing(false); }
+  }
+
+  // Empuje automático (con retardo) tras cada cambio
+  function scheduleSync() {
+    if (!autoSync || !driveConnected) return;
+    if (syncTimer.current) clearTimeout(syncTimer.current);
+    syncTimer.current = setTimeout(async () => {
+      try {
+        setSyncing(true);
+        await Drive.getToken(true);
+        await Drive.saveLibrary(buildPayload(booksRef.current, tombRef.current));
+        const now = Date.now(); setLastSync(now); await DB.setSetting("lastSync", now);
+      } catch (e) { /* callado: reintenta en el próximo cambio o al reabrir */ }
+      finally { setSyncing(false); }
+    }, 1500);
+  }
+
+  async function setAutoSync(v) {
+    setAutoSyncState(v); await DB.setSetting("autoSync", v);
+    if (v) await syncFromDrive({ silent: false });
+    else toast("Sincronización automática desactivada");
+  }
 
   function setClientId(cid) {
     setClientIdState(cid);
@@ -1132,10 +1340,11 @@ function App() {
     try {
       if (!Drive.ready()) { toast("Google Drive solo funciona en la app publicada (no en la vista previa)", "err"); return; }
       if (!Drive.isConfigured()) Drive.init(clientId);
-      await Drive.getToken();
+      await Drive.getToken(false);
       await Drive.ensureFolder();
       setDriveConnected(true);
       toast("Conectado a Google Drive", "ok");
+      if (autoSync) await syncFromDrive({ silent: false });
     } catch (e) { toast(e.message || "No se pudo conectar a Drive", "err"); }
   }
   function disconnectDrive() { Drive.clearToken(); setDriveConnected(false); setPreferDrive(false); toast("Sesión de Drive cerrada"); }
@@ -1143,11 +1352,15 @@ function App() {
   function upsertBook(rec) {
     setBooks(prev => {
       const i = prev.findIndex(x => x.id === rec.id);
-      if (i >= 0) { const c = [...prev]; c[i] = rec; return c; }
-      return [rec, ...prev];
+      let next;
+      if (i >= 0) { next = [...prev]; next[i] = rec; }
+      else next = [rec, ...prev];
+      booksRef.current = next;
+      return next;
     });
     setShowForm(false); setEditing(null);
     if (detail && detail.id === rec.id) setDetail(rec);
+    scheduleSync();
   }
 
   async function reallyDelete(book) {
@@ -1157,9 +1370,12 @@ function App() {
         else if (book.file.storage === "drive" && book.file.driveFileId) await Drive.remove(book.file.driveFileId);
       }
       await DB.deleteBook(book.id);
-      setBooks(prev => prev.filter(x => x.id !== book.id));
+      tombRef.current = [...tombRef.current.filter(t => t.id !== book.id), { id: book.id, at: Date.now() }];
+      await DB.setSetting("tombstones", tombRef.current);
+      setBooks(prev => { const next = prev.filter(x => x.id !== book.id); booksRef.current = next; return next; });
       setConfirmDel(null); setDetail(null);
       toast("Libro eliminado");
+      scheduleSync();
     } catch (e) { toast("No se pudo eliminar", "err"); }
   }
 
@@ -1272,6 +1488,11 @@ function App() {
           </div>
         </div>
         <div className="topbar-spacer" />
+        {autoSync && (
+          <button className="icon-btn" onClick={() => syncFromDrive({ silent: false })} aria-label="Sincronizar" title={lastSync ? "Sincronizar ahora" : "Sincronizar"} disabled={syncing}>
+            {syncing ? <Ic.loader /> : <Ic.cloud />}
+          </button>
+        )}
         <button className="icon-btn" onClick={() => setShowSettings(true)} aria-label="Ajustes" title="Ajustes"><Ic.settings /></button>
         <button className="btn btn-primary" onClick={() => { setEditing(null); setShowForm(true); }}>
           <Ic.plus s={18} /> <span className="hide-sm">Agregar libro</span>
@@ -1373,6 +1594,9 @@ function App() {
           preferDrive={preferDrive} setPreferDrive={setPreferDrive}
           onExport={exportJSON} onImport={importJSON}
           exporting={exporting} importing={importing}
+          autoSync={autoSync} setAutoSync={setAutoSync}
+          syncing={syncing} lastSync={lastSync}
+          syncNow={() => syncFromDrive({ silent: false })}
           onClose={() => setShowSettings(false)}
         />
       )}
