@@ -463,26 +463,47 @@ const DB = (() => {
 const Drive = (() => {
   let tokenClient = null, accessToken = null, folderId = null, clientId = "";
 
+  let pending = null;
+
   function ready() { return typeof google !== "undefined" && google.accounts && google.accounts.oauth2; }
+
+  function mapErr(e) {
+    const t = (e && e.type) || (e && e.error) || "";
+    if (t === "popup_closed") return "Se cerró la ventana de Google antes de otorgar el permiso. Reintenta y elige tu cuenta sin cerrar el popup.";
+    if (t === "popup_failed_to_open") return "El navegador bloqueó la ventana emergente. Permite las ventanas emergentes para este sitio y vuelve a intentar.";
+    if (t === "access_denied") return "Google denegó el acceso. Agrega tu cuenta como usuario de prueba en la consola de Google.";
+    return "No se pudo autorizar en Google (" + (t || "motivo desconocido") + "). Activa las cookies de terceros para accounts.google.com o prueba en Chrome de escritorio.";
+  }
 
   function init(cid) {
     clientId = cid;
     if (!ready() || !cid) return false;
     tokenClient = google.accounts.oauth2.initTokenClient({
-      client_id: cid, scope: DRIVE_SCOPE, callback: () => {},
+      client_id: cid,
+      scope: DRIVE_SCOPE,
+      callback: (resp) => {
+        if (resp && resp.access_token) {
+          accessToken = resp.access_token;
+          if (pending) { pending.resolve(accessToken); pending = null; }
+        } else if (pending) {
+          pending.reject(new Error(mapErr(resp))); pending = null;
+        }
+      },
+      error_callback: (err) => {
+        if (pending) { pending.reject(new Error(mapErr(err))); pending = null; }
+      },
     });
     return true;
   }
 
+  // Reutiliza el token de la sesión: así solo se abre UNA ventana de permiso por sesión.
   function getToken() {
     return new Promise((res, rej) => {
+      if (accessToken) return res(accessToken);
       if (!tokenClient) return rej(new Error("Google Drive no está configurado. Agrega tu Client ID en Ajustes."));
-      tokenClient.callback = (resp) => {
-        if (resp.error) return rej(new Error(resp.error));
-        accessToken = resp.access_token;
-        res(accessToken);
-      };
-      tokenClient.requestAccessToken({ prompt: accessToken ? "" : "consent" });
+      pending = { resolve: res, reject: rej };
+      try { tokenClient.requestAccessToken({ prompt: "consent" }); }
+      catch (e) { pending = null; rej(e); }
     });
   }
 
