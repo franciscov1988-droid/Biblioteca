@@ -346,6 +346,27 @@
   .toast.ok .ic{color:var(--ok);}
   .toast.err .ic{color:var(--danger);}
 
+  /* Lector EPUB */
+  .reader{position:fixed;inset:0;z-index:80;background:var(--bg);display:flex;flex-direction:column;}
+  .reader-top{display:flex;align-items:center;gap:6px;padding:9px 12px;border-bottom:1px solid var(--line);background:var(--surface);}
+  .reader-title{flex:1;font-family:var(--serif);font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}
+  .reader-fbtn{height:36px;min-width:40px;padding:0 10px;border-radius:9px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink-soft);font-weight:600;font-size:14px;display:grid;place-items:center;}
+  .reader-fbtn:hover{color:var(--ink);border-color:var(--line-strong);}
+  .reader-view{flex:1;position:relative;overflow:hidden;}
+  .reader-canvas{position:absolute;top:0;bottom:0;left:44px;right:44px;}
+  .reader-arrow{position:absolute;top:0;bottom:0;width:44px;display:grid;place-items:center;color:var(--ink-faint);z-index:5;transition:.15s;}
+  .reader-arrow:hover{color:var(--accent-soft);background:rgba(255,255,255,.03);}
+  .reader-arrow.left{left:0;} .reader-arrow.right{right:0;}
+  .reader-loading{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--ink-faint);text-align:center;z-index:6;background:var(--bg);padding:24px;}
+  .reader-bottom{display:flex;align-items:center;gap:11px;padding:9px 16px;border-top:1px solid var(--line);background:var(--surface);}
+  .reader-progress{flex:1;height:5px;border-radius:3px;background:var(--surface-3);overflow:hidden;}
+  .reader-progress>div{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent-soft));transition:width .25s;}
+  .reader-pct{font-size:12px;color:var(--ink-faint);min-width:36px;text-align:right;}
+  @media (max-width:560px){
+    .reader-canvas{left:36px;right:36px;}
+    .reader-arrow{width:36px;}
+  }
+
   .hidden{display:none !important;}
   .muted{color:var(--ink-faint);}
   .spin{animation:spin 1s linear infinite;}
@@ -409,6 +430,10 @@ const Ic = {
   loader:(p)=><svg className="spin" width={p.s||18} height={p.s||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.5"/></svg>,
   open:(p)=><svg width={p.s||18} height={p.s||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6M10 14L21 3"/></svg>,
   books:(p)=><svg width={p.s||22} height={p.s||22} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M9 7h6"/></svg>,
+  bookOpen:(p)=><svg width={p.s||18} height={p.s||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>,
+  chevL:(p)=><svg width={p.s||26} height={p.s||26} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6"/></svg>,
+  chevR:(p)=><svg width={p.s||26} height={p.s||26} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6"/></svg>,
+  contrast:(p)=><svg width={p.s||20} height={p.s||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/></svg>,
 };
 
 /* ============================================================
@@ -700,6 +725,108 @@ function fmtOf(file) {
 }
 
 /* ============================================================
+   CARGA DE LIBRERÍAS BAJO DEMANDA (JSZip, epub.js, pdf.js)
+   Se descargan solo la primera vez que se usan.
+   ============================================================ */
+const CDN = {
+  jszip: "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
+  epub: "https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js",
+  pdf: "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js",
+  pdfWorker: "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js",
+};
+const _libs = {};
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = src; s.async = true;
+    s.onload = () => res();
+    s.onerror = () => rej(new Error("No se pudo cargar una librería (revisa tu conexión): " + src));
+    document.head.appendChild(s);
+  });
+}
+async function ensureJSZip() {
+  if (window.JSZip) return;
+  if (!_libs.jszip) _libs.jszip = loadScript(CDN.jszip);
+  await _libs.jszip;
+}
+async function ensureEpub() {
+  await ensureJSZip();                 // epub.js necesita JSZip como global
+  if (window.ePub) return;
+  if (!_libs.epub) _libs.epub = loadScript(CDN.epub);
+  await _libs.epub;
+}
+async function ensurePdf() {
+  if (window.pdfjsLib) return;
+  if (!_libs.pdf) _libs.pdf = loadScript(CDN.pdf).then(() => {
+    if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc = CDN.pdfWorker;
+  });
+  await _libs.pdf;
+}
+
+/* ============================================================
+   EXTRACCIÓN AUTOMÁTICA DE DATOS DEL ARCHIVO
+   ============================================================ */
+function dcText(doc, tag) {
+  // Busca metadatos Dublin Core, con o sin espacio de nombres
+  let el = doc.getElementsByTagNameNS("http://purl.org/dc/elements/1.1/", tag)[0];
+  if (!el) el = doc.getElementsByTagName("dc:" + tag)[0];
+  if (!el) { const all = doc.getElementsByTagName(tag); if (all.length) el = all[0]; }
+  return el ? (el.textContent || "").trim() : "";
+}
+
+async function extractEpubMeta(file) {
+  await ensureJSZip();
+  const zip = await window.JSZip.loadAsync(await file.arrayBuffer());
+  const containerXml = await zip.file("META-INF/container.xml").async("string");
+  const cdoc = new DOMParser().parseFromString(containerXml, "application/xml");
+  const rootfile = cdoc.querySelector("rootfile");
+  const opfPath = rootfile.getAttribute("full-path");
+  const opf = await zip.file(opfPath).async("string");
+  const doc = new DOMParser().parseFromString(opf, "application/xml");
+  const title = dcText(doc, "title");
+  const author = dcText(doc, "creator");
+  const dateRaw = dcText(doc, "date");
+  const year = (dateRaw.match(/\d{4}/) || [])[0] || "";
+  const publisher = dcText(doc, "publisher");
+  // Estimación de páginas: cuenta palabras del contenido (≈300 por página)
+  let words = 0;
+  try {
+    const htmlFiles = Object.keys(zip.files).filter(n => /\.x?html?$/i.test(n));
+    for (const n of htmlFiles) {
+      const txt = await zip.file(n).async("string");
+      const plain = txt.replace(/<[^>]+>/g, " ").replace(/&[a-z]+;/gi, " ");
+      words += (plain.match(/\S+/g) || []).length;
+    }
+  } catch (e) {}
+  const pages = words ? String(Math.max(1, Math.round(words / 300))) : "";
+  return { title, author, year, publisher, pages, pagesApprox: !!words };
+}
+
+async function extractPdfMeta(file) {
+  await ensurePdf();
+  const pdf = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  const pages = String(pdf.numPages);
+  let title = "", author = "", year = "";
+  try {
+    const md = await pdf.getMetadata();
+    const info = md.info || {};
+    title = (info.Title || "").trim();
+    author = (info.Author || "").trim();
+    const cd = info.CreationDate || info.ModDate || "";
+    const m = String(cd).match(/D:(\d{4})/) || String(cd).match(/(\d{4})/);
+    if (m) year = m[1];
+  } catch (e) {}
+  return { title, author, year, pages, pagesApprox: false };
+}
+
+async function extractMetadata(file) {
+  const n = file.name.toLowerCase();
+  if (n.endsWith(".epub")) return extractEpubMeta(file);
+  if (n.endsWith(".pdf")) return extractPdfMeta(file);
+  return {};
+}
+
+/* ============================================================
    COMPONENTES pequeños
    ============================================================ */
 function Stars({ value, size = 15 }) {
@@ -790,6 +917,7 @@ function BookForm({ initial, driveEnabled, preferDrive, onSave, onClose, toast }
   const [removeFile, setRemoveFile] = useState(false);
   const [saving, setSaving] = useState(false);
   const [progress, setProgress] = useState("");
+  const [reading, setReading] = useState(false);       // leyendo metadatos del archivo
   const coverRef = useRef(), fileRef = useRef();
   const set = (k, v) => setB(p => ({ ...p, [k]: v }));
 
@@ -799,11 +927,31 @@ function BookForm({ initial, driveEnabled, preferDrive, onSave, onClose, toast }
     catch { toast("No se pudo procesar la imagen", "err"); }
   }
 
-  function pickFile(e) {
+  async function pickFile(e) {
     const f = e.target.files[0]; if (!f) return;
     const ok = /\.(epub|pdf)$/i.test(f.name);
     if (!ok) { toast("Solo se admiten archivos EPUB o PDF", "err"); return; }
     setNewFile(f); setRemoveFile(false);
+    // Lee datos del archivo y rellena solo los campos que estén vacíos
+    setReading(true);
+    try {
+      const meta = await extractMetadata(f);
+      setB(p => {
+        const n = { ...p };
+        if (!p.title.trim() && meta.title) n.title = meta.title;
+        if (!p.author.trim() && meta.author) n.author = meta.author;
+        if (!p.year && meta.year) n.year = meta.year;
+        if (!p.pages && meta.pages) n.pages = meta.pages;
+        return n;
+      });
+      if (meta.title || meta.author || meta.year || meta.pages) {
+        toast(meta.pagesApprox ? "Datos tomados del archivo (páginas aproximadas)" : "Datos tomados del archivo", "ok");
+      } else {
+        toast("El archivo no traía datos; complétalos a mano", "ok");
+      }
+    } catch (err) {
+      toast("No se pudieron leer los datos del archivo", "err");
+    } finally { setReading(false); }
   }
 
   async function save() {
@@ -915,10 +1063,10 @@ function BookForm({ initial, driveEnabled, preferDrive, onSave, onClose, toast }
               <input ref={fileRef} type="file" accept=".epub,.pdf,application/pdf,application/epub+zip" className="hidden" onChange={pickFile} />
               {curFile ? (
                 <div className="dropzone">
-                  <div className="dz-ic"><Ic.file /></div>
+                  <div className="dz-ic">{reading ? <Ic.loader /> : <Ic.file />}</div>
                   <div className="dz-txt">
                     <b>{curFileName}</b>
-                    <span>{fmtSize(curFileSize)} · {newFile ? "listo para guardar" : (b.file.storage === "drive" ? "en Google Drive" : "guardado localmente")}</span>
+                    <span>{reading ? "Leyendo datos del libro…" : (fmtSize(curFileSize) + " · " + (newFile ? "listo para guardar" : (b.file.storage === "drive" ? "en Google Drive" : "guardado localmente")))}</span>
                   </div>
                   <button type="button" className="icon-btn" onClick={() => { setNewFile(null); setRemoveFile(true); if(fileRef.current) fileRef.current.value=""; }} aria-label="Quitar archivo"><Ic.x /></button>
                 </div>
@@ -948,7 +1096,7 @@ function BookForm({ initial, driveEnabled, preferDrive, onSave, onClose, toast }
 /* ============================================================
    DETALLE del libro
    ============================================================ */
-function BookDetail({ book, onClose, onEdit, onDelete, toast }) {
+function BookDetail({ book, onClose, onEdit, onDelete, onRead, toast }) {
   const [busy, setBusy] = useState(false);
   const fmt = book.file ? fmtOf(book.file) : "";
 
@@ -1022,9 +1170,20 @@ function BookDetail({ book, onClose, onEdit, onDelete, toast }) {
 
               {book.file && (
                 <div style={{display:"flex", gap:9, flexWrap:"wrap", marginTop:4}}>
-                  <button className="btn btn-primary btn-sm" onClick={openFile} disabled={busy}>
-                    {busy ? <Ic.loader/> : <Ic.open s={16}/>} Abrir {fmt}
-                  </button>
+                  {fmt === "EPUB" ? (
+                    <button className="btn btn-primary btn-sm" onClick={() => onRead(book)}>
+                      <Ic.bookOpen s={16}/> {book.readerCfi ? "Continuar lectura" : "Leer"}
+                    </button>
+                  ) : (
+                    <button className="btn btn-primary btn-sm" onClick={openFile} disabled={busy}>
+                      {busy ? <Ic.loader/> : <Ic.open s={16}/>} Abrir {fmt}
+                    </button>
+                  )}
+                  {fmt === "EPUB" && (
+                    <button className="btn btn-ghost btn-sm" onClick={openFile} disabled={busy}>
+                      {busy ? <Ic.loader/> : <Ic.open s={16}/>} Abrir externo
+                    </button>
+                  )}
                   <button className="btn btn-ghost btn-sm" onClick={downloadFile} disabled={busy}>
                     <Ic.download s={16}/> Descargar
                   </button>
@@ -1175,6 +1334,126 @@ function Confirm({ title, message, confirmText, onConfirm, onClose }) {
 }
 
 /* ============================================================
+   LECTOR EPUB (epub.js)
+   ============================================================ */
+function registerReaderThemes(rend) {
+  const defs = {
+    dark:  { bg: "#14110E", fg: "#EDE6DA", link: "#E0B25F" },
+    sepia: { bg: "#F4ECD8", fg: "#5B4636", link: "#7A5A2F" },
+    light: { bg: "#FFFFFF", fg: "#1A1A1A", link: "#1A5FB4" },
+  };
+  Object.keys(defs).forEach(name => {
+    const c = defs[name];
+    rend.themes.register(name, {
+      "body": { background: c.bg + " !important", color: c.fg + " !important", "padding": "0 6px !important", "line-height": "1.6 !important" },
+      "p, div, span, h1, h2, h3, h4, h5, h6, li, td, th, blockquote, figcaption": { color: c.fg + " !important" },
+      "a, a *": { color: c.link + " !important" },
+      "img, svg": { "max-width": "100% !important", "height": "auto !important" },
+    });
+  });
+}
+
+function EpubReader({ book, onClose, onSaveCfi, toast }) {
+  const viewerRef = useRef(null);
+  const bookRef = useRef(null);
+  const rendRef = useRef(null);
+  const cfiRef = useRef(book.readerCfi || null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [pct, setPct] = useState(0);
+  const [fontSize, setFontSize] = useState(100);
+  const themeRef = useRef("dark");
+  const [theme, setTheme] = useState("dark");
+
+  const next = () => { try { rendRef.current && rendRef.current.next(); } catch (e) {} };
+  const prev = () => { try { rendRef.current && rendRef.current.prev(); } catch (e) {} };
+
+  useEffect(() => {
+    let cancelled = false;
+    const onKey = (e) => { if (e.key === "ArrowLeft") prev(); else if (e.key === "ArrowRight") next(); };
+    (async () => {
+      try {
+        await ensureEpub();
+        let blob;
+        if (book.file.storage === "drive") blob = await Drive.download(book.file.driveFileId);
+        else { const rec = await DB.getFile(book.id); if (!rec) throw new Error("El archivo no está en este dispositivo. Ábrelo en el dispositivo donde lo guardaste o actívalo en Drive."); blob = rec.blob; }
+        if (cancelled) return;
+        const buf = await blob.arrayBuffer();
+        const epub = window.ePub(buf);
+        bookRef.current = epub;
+        const rend = epub.renderTo(viewerRef.current, { width: "100%", height: "100%", flow: "paginated", spread: "auto", allowScriptedContent: true });
+        rendRef.current = rend;
+        registerReaderThemes(rend);
+        rend.themes.select(themeRef.current);
+        rend.themes.fontSize("100%");
+        await rend.display(cfiRef.current || undefined);
+        if (cancelled) return;
+        setLoading(false);
+        rend.on("relocated", (loc) => {
+          cfiRef.current = loc.start.cfi;
+          if (loc.start.percentage != null) setPct(Math.round(loc.start.percentage * 100));
+          onSaveCfi(book.id, loc.start.cfi);
+        });
+        document.addEventListener("keyup", onKey);
+        epub.locations.generate(1400).then(() => {
+          try { const p = epub.locations.percentageFromCfi(cfiRef.current); if (p != null) setPct(Math.round(p * 100)); } catch (e) {}
+        }).catch(() => {});
+      } catch (e) {
+        if (!cancelled) { setErr(e.message || "No se pudo abrir el libro"); setLoading(false); }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      document.removeEventListener("keyup", onKey);
+      try { rendRef.current && rendRef.current.destroy(); } catch (e) {}
+      try { bookRef.current && bookRef.current.destroy(); } catch (e) {}
+    };
+  }, []);
+
+  function changeFont(d) {
+    setFontSize(s => {
+      const n = Math.min(170, Math.max(70, s + d));
+      try { rendRef.current && rendRef.current.themes.fontSize(n + "%"); } catch (e) {}
+      return n;
+    });
+  }
+  function cycleTheme() {
+    const order = ["dark", "sepia", "light"];
+    const n = order[(order.indexOf(themeRef.current) + 1) % 3];
+    themeRef.current = n; setTheme(n);
+    try { rendRef.current && rendRef.current.themes.select(n); } catch (e) {}
+  }
+
+  return (
+    <div className="reader">
+      <div className="reader-top">
+        <button className="icon-btn" onClick={onClose} aria-label="Cerrar"><Ic.x /></button>
+        <div className="reader-title">{book.title}</div>
+        <button className="reader-fbtn" onClick={() => changeFont(-10)} aria-label="Reducir letra">A−</button>
+        <button className="reader-fbtn" onClick={() => changeFont(10)} aria-label="Aumentar letra" style={{fontSize:16}}>A+</button>
+        <button className="reader-fbtn" onClick={cycleTheme} aria-label="Cambiar tema" title={"Tema: " + theme}><Ic.contrast s={18} /></button>
+      </div>
+      <div className="reader-view">
+        {(loading || err) && (
+          <div className="reader-loading">
+            {err ? <Ic.alert s={26} /> : <Ic.loader s={28} />}
+            <p style={{maxWidth:320, lineHeight:1.5}}>{err || "Abriendo el libro…"}</p>
+            {err && <button className="btn btn-ghost btn-sm" onClick={onClose}>Cerrar</button>}
+          </div>
+        )}
+        <button className="reader-arrow left" onClick={prev} aria-label="Página anterior"><Ic.chevL /></button>
+        <div className="reader-canvas" ref={viewerRef}></div>
+        <button className="reader-arrow right" onClick={next} aria-label="Página siguiente"><Ic.chevR /></button>
+      </div>
+      <div className="reader-bottom">
+        <div className="reader-progress"><div style={{width: pct + "%"}}></div></div>
+        <span className="reader-pct">{pct}%</span>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
    APP principal
    ============================================================ */
 function App() {
@@ -1190,6 +1469,8 @@ function App() {
   const [detail, setDetail] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [confirmDel, setConfirmDel] = useState(null);
+  const [reader, setReader] = useState(null);
+  const cfiTimer = useRef(null);
 
   const [clientId, setClientIdState] = useState(DRIVE_CLIENT_ID);
   const [driveConnected, setDriveConnected] = useState(false);
@@ -1365,6 +1646,16 @@ function App() {
     setShowForm(false); setEditing(null);
     if (detail && detail.id === rec.id) setDetail(rec);
     scheduleSync();
+  }
+
+  // Guarda el punto de lectura (CFI) sin marcar el libro como modificado, con retardo
+  function saveReaderCfi(id, cfi) {
+    setBooks(prev => { const next = prev.map(b => b.id === id ? { ...b, readerCfi: cfi } : b); booksRef.current = next; return next; });
+    if (cfiTimer.current) clearTimeout(cfiTimer.current);
+    cfiTimer.current = setTimeout(async () => {
+      const bk = booksRef.current.find(b => b.id === id);
+      if (bk) { try { await DB.putBook(bk); } catch (e) {} scheduleSync(); }
+    }, 1800);
   }
 
   async function reallyDelete(book) {
@@ -1577,6 +1868,16 @@ function App() {
           onClose={() => setDetail(null)}
           onEdit={(b) => { setEditing(b); setShowForm(true); }}
           onDelete={(b) => setConfirmDel(b)}
+          onRead={(b) => setReader(b)}
+          toast={toast}
+        />
+      )}
+
+      {reader && (
+        <EpubReader
+          book={reader}
+          onClose={() => setReader(null)}
+          onSaveCfi={saveReaderCfi}
           toast={toast}
         />
       )}
