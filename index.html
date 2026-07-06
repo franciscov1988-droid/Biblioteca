@@ -368,6 +368,19 @@
   }
 
   .hidden{display:none !important;}
+  .seg{display:inline-flex;background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:3px;gap:2px;flex-wrap:wrap;}
+  .seg button{padding:8px 13px;border-radius:8px;font-size:13.5px;font-weight:600;color:var(--ink-faint);transition:.14s;display:inline-flex;align-items:center;gap:7px;}
+  .seg button.on{background:var(--surface-3);color:var(--accent-soft);}
+  .seg button:disabled{opacity:.4;cursor:not-allowed;}
+  .section-head{display:flex;align-items:center;gap:10px;margin:26px 0 14px;}
+  .section-head:first-child{margin-top:0;}
+  .section-head .sh-ic{width:30px;height:30px;flex:none;border-radius:8px;display:grid;place-items:center;}
+  .section-head h2{font-family:var(--serif);font-size:18px;font-weight:600;margin:0;}
+  .section-head .count{font-size:12.5px;color:var(--ink-faint);background:var(--surface);border:1px solid var(--line);padding:2px 9px;border-radius:20px;}
+  .section-head .line{flex:1;height:1px;background:var(--line);}
+  .badge-unread{background:rgba(127,176,224,.14);border:1px solid rgba(127,176,224,.35);color:#8fbce8;}
+  .cover-status{position:absolute;top:8px;left:8px;z-index:3;font-size:10px;font-weight:700;letter-spacing:.4px;padding:3px 7px;border-radius:6px;backdrop-filter:blur(4px);}
+  .cover-status.unread{background:rgba(15,13,10,.82);color:#8fbce8;border:1px solid rgba(127,176,224,.4);}
   .muted{color:var(--ink-faint);}
   .spin{animation:spin 1s linear infinite;}
   @keyframes spin{to{transform:rotate(360deg);}}
@@ -667,6 +680,95 @@ const Drive = (() => {
 })();
 
 /* ============================================================
+   DROPBOX — tercer servicio de almacenamiento (opcional)
+   Usa OAuth de token (implícito) con redirección; carpeta de la app.
+   ============================================================ */
+const Dropbox = (() => {
+  let appKey = "", token = null;
+
+  function setKey(k) { appKey = (k || "").trim(); }
+  function isConfigured() { return !!appKey; }
+  function hasToken() { return !!token; }
+  function clear() { token = null; }
+
+  function connect() {
+    if (!appKey) throw new Error("Falta la App key de Dropbox (ponla en Ajustes).");
+    const redirect = location.origin + location.pathname;
+    const url = "https://www.dropbox.com/oauth2/authorize"
+      + "?client_id=" + encodeURIComponent(appKey)
+      + "&response_type=token&token_access_type=online"
+      + "&redirect_uri=" + encodeURIComponent(redirect)
+      + "&state=dbx";
+    location.href = url;   // redirección de página completa; vuelve con el token
+  }
+
+  // Se llama al cargar la app para capturar el token tras volver de Dropbox
+  function captureFromHash() {
+    const h = location.hash || "";
+    if (h.includes("access_token") && h.includes("state=dbx")) {
+      const p = new URLSearchParams(h.replace(/^#/, ""));
+      token = p.get("access_token");
+      try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {}
+      return !!token;
+    }
+    return false;
+  }
+
+  async function upload(fileBlob, name) {
+    if (!token) throw new Error("Conéctate a Dropbox primero.");
+    const path = "/" + (name || "libro").replace(/[\\/:*?\"<>|]/g, "_");
+    const r = await fetch("https://content.dropboxapi.com/2/files/upload", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + token,
+        "Dropbox-API-Arg": JSON.stringify({ path, mode: "add", autorename: true, mute: true }),
+        "Content-Type": "application/octet-stream",
+      },
+      body: fileBlob,
+    });
+    if (!r.ok) throw new Error("Dropbox: error al subir (" + r.status + ")");
+    const d = await r.json();
+    return { storage: "dropbox", dropboxId: d.id, dropboxPath: d.path_lower };
+  }
+
+  async function download(pathOrId) {
+    if (!token) throw new Error("Conéctate a Dropbox primero.");
+    const r = await fetch("https://content.dropboxapi.com/2/files/download", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + token, "Dropbox-API-Arg": JSON.stringify({ path: pathOrId }) },
+    });
+    if (!r.ok) throw new Error("Dropbox: no se pudo descargar (" + r.status + ")");
+    return r.blob();
+  }
+
+  async function remove(pathOrId) {
+    if (!token) return;
+    try {
+      await fetch("https://api.dropboxapi.com/2/files/delete_v2", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+        body: JSON.stringify({ path: pathOrId }),
+      });
+    } catch (e) {}
+  }
+
+  return { setKey, isConfigured, hasToken, clear, connect, captureFromHash, upload, download, remove };
+})();
+
+/* Descarga el blob de un libro sea cual sea su ubicación */
+async function getBookBlob(book) {
+  const f = book.file;
+  if (!f) throw new Error("Este libro no tiene archivo.");
+  if (f.storage === "drive") return Drive.download(f.driveFileId);
+  if (f.storage === "dropbox") return Dropbox.download(f.dropboxPath || f.dropboxId);
+  const rec = await DB.getFile(book.id);
+  if (!rec) throw new Error("El archivo no está en este dispositivo. Ábrelo donde lo guardaste o súbelo a Drive/Dropbox.");
+  return rec.blob;
+}
+
+const STORAGE_LABEL = { local: "En este dispositivo", drive: "Google Drive", dropbox: "Dropbox" };
+
+/* ============================================================
    UTILIDADES
    ============================================================ */
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -856,13 +958,16 @@ function RateInput({ value, onChange }) {
    ============================================================ */
 function BookCard({ book, onOpen }) {
   const fmt = book.file ? fmtOf(book.file) : "";
-  const onDrive = book.file && book.file.storage === "drive";
+  const store = book.file && book.file.storage;
+  const unread = book.status === "unread";
   return (
     <div className="card" onClick={() => onOpen(book)}>
       <div className="cover">
+        {unread && <span className="cover-status unread">POR LEER</span>}
         <div className="cover-badges">
           {fmt && <span className="fmt-badge">{fmt}</span>}
-          {onDrive && <span className="fmt-badge drive-badge">Drive</span>}
+          {store === "drive" && <span className="fmt-badge drive-badge">Drive</span>}
+          {store === "dropbox" && <span className="fmt-badge drive-badge">Dropbox</span>}
         </div>
         {book.cover
           ? <img src={book.cover} alt={book.title} loading="lazy" />
@@ -872,7 +977,7 @@ function BookCard({ book, onOpen }) {
         <div className="card-title">{book.title}</div>
         <div className="card-author">{book.author || "—"}</div>
         <div className="card-meta">
-          {book.rating ? <Stars value={book.rating} size={13} /> : <span className="muted" style={{fontSize:11}}>Sin nota</span>}
+          {book.rating ? <Stars value={book.rating} size={13} /> : <span className="muted" style={{fontSize:11}}>{unread ? "Por leer" : "Sin nota"}</span>}
           {book.genre && <span className="card-genre">{book.genre}</span>}
         </div>
       </div>
@@ -882,7 +987,8 @@ function BookCard({ book, onOpen }) {
 
 function BookRow({ book, onOpen }) {
   const fmt = book.file ? fmtOf(book.file) : "";
-  const onDrive = book.file && book.file.storage === "drive";
+  const store = book.file && book.file.storage;
+  const unread = book.status === "unread";
   return (
     <div className="row" onClick={() => onOpen(book)}>
       <div className="row-cover">
@@ -895,9 +1001,11 @@ function BookRow({ book, onOpen }) {
       <div className="row-side">
         {book.rating ? <Stars value={book.rating} size={13} /> : <span className="muted" style={{fontSize:11}}>—</span>}
         <div className="row-tags">
+          {unread && <span className="chip badge-unread">Por leer</span>}
           {book.genre && <span className="chip">{book.genre}</span>}
           {fmt && <span className="chip chip-accent">{fmt}</span>}
-          {onDrive && <span className="chip" style={{color:"#7fb0e0"}}>Drive</span>}
+          {store === "drive" && <span className="chip" style={{color:"#7fb0e0"}}>Drive</span>}
+          {store === "dropbox" && <span className="chip" style={{color:"#7fb0e0"}}>Dropbox</span>}
         </div>
       </div>
     </div>
@@ -907,14 +1015,18 @@ function BookRow({ book, onOpen }) {
 /* ============================================================
    FORMULARIO agregar/editar
    ============================================================ */
-function BookForm({ initial, driveEnabled, preferDrive, onSave, onClose, toast }) {
+function BookForm({ initial, driveEnabled, dropboxEnabled, defaultStorage, onSave, onClose, toast }) {
   const [b, setB] = useState(() => initial || {
     id: uid(), title: "", author: "", genre: "", year: "", pages: "",
     readDate: new Date().toISOString().slice(0,10), rating: 0, review: "",
-    cover: "", file: null, dateAdded: Date.now(),
+    cover: "", file: null, status: "read", dateAdded: Date.now(),
   });
   const [newFile, setNewFile] = useState(null);       // File pendiente de guardar
   const [removeFile, setRemoveFile] = useState(false);
+  const [dest, setDest] = useState(() => {
+    if (initial && initial.file) return initial.file.storage;   // conserva el destino actual
+    return defaultStorage || "local";
+  });
   const [saving, setSaving] = useState(false);
   const [progress, setProgress] = useState("");
   const [reading, setReading] = useState(false);       // leyendo metadatos del archivo
@@ -964,19 +1076,26 @@ function BookForm({ initial, driveEnabled, preferDrive, onSave, onClose, toast }
       if ((newFile || removeFile) && b.file) {
         if (b.file.storage === "local") await DB.deleteFile(b.id);
         else if (b.file.storage === "drive" && b.file.driveFileId) await Drive.remove(b.file.driveFileId);
+        else if (b.file.storage === "dropbox" && (b.file.dropboxPath || b.file.dropboxId)) await Dropbox.remove(b.file.dropboxPath || b.file.dropboxId);
       }
 
       if (newFile) {
-        const useDrive = driveEnabled && preferDrive;
-        if (useDrive) {
+        const common = { fileName: newFile.name, fileType: newFile.type, fileSize: newFile.size };
+        let target = dest;
+        if (target === "drive" && !driveEnabled) throw new Error("Conéctate a Google Drive o elige otro destino.");
+        if (target === "dropbox" && !dropboxEnabled) throw new Error("Conéctate a Dropbox o elige otro destino.");
+        if (target === "drive") {
           setProgress("Subiendo a Google Drive…");
           const up = await Drive.upload(newFile, newFile.name, newFile.type);
-          file = { storage: "drive", driveFileId: up.id, driveLink: up.webViewLink,
-                   fileName: newFile.name, fileType: newFile.type, fileSize: newFile.size };
+          file = { storage: "drive", driveFileId: up.id, driveLink: up.webViewLink, ...common };
+        } else if (target === "dropbox") {
+          setProgress("Subiendo a Dropbox…");
+          const up = await Dropbox.upload(newFile, newFile.name);
+          file = { storage: "dropbox", dropboxId: up.dropboxId, dropboxPath: up.dropboxPath, ...common };
         } else {
           setProgress("Guardando archivo…");
           await DB.putFile(b.id, newFile);
-          file = { storage: "local", fileName: newFile.name, fileType: newFile.type, fileSize: newFile.size };
+          file = { storage: "local", ...common };
         }
       }
 
@@ -1023,6 +1142,17 @@ function BookForm({ initial, driveEnabled, preferDrive, onSave, onClose, toast }
 
           <div className="form-grid">
             <div className="full">
+              <label className="lbl">Estado</label>
+              <div className="seg">
+                <button type="button" className={b.status !== "unread" ? "on" : ""} onClick={() => set("status", "read")}>
+                  <Ic.check s={16}/> Leído
+                </button>
+                <button type="button" className={b.status === "unread" ? "on" : ""} onClick={() => set("status", "unread")}>
+                  <Ic.bookOpen s={16}/> Por leer
+                </button>
+              </div>
+            </div>
+            <div className="full">
               <label className="lbl">Título *</label>
               <input className="inp" value={b.title} onChange={e => set("title", e.target.value)} placeholder="Ej: Asombro" autoFocus />
             </div>
@@ -1066,7 +1196,7 @@ function BookForm({ initial, driveEnabled, preferDrive, onSave, onClose, toast }
                   <div className="dz-ic">{reading ? <Ic.loader /> : <Ic.file />}</div>
                   <div className="dz-txt">
                     <b>{curFileName}</b>
-                    <span>{reading ? "Leyendo datos del libro…" : (fmtSize(curFileSize) + " · " + (newFile ? "listo para guardar" : (b.file.storage === "drive" ? "en Google Drive" : "guardado localmente")))}</span>
+                    <span>{reading ? "Leyendo datos del libro…" : (fmtSize(curFileSize) + " · " + (newFile ? "listo para guardar" : ("en " + (STORAGE_LABEL[b.file.storage] || "este dispositivo"))))}</span>
                   </div>
                   <button type="button" className="icon-btn" onClick={() => { setNewFile(null); setRemoveFile(true); if(fileRef.current) fileRef.current.value=""; }} aria-label="Quitar archivo"><Ic.x /></button>
                 </div>
@@ -1075,8 +1205,31 @@ function BookForm({ initial, driveEnabled, preferDrive, onSave, onClose, toast }
                   <div className="dz-ic"><Ic.upload /></div>
                   <div className="dz-txt">
                     <b>Subir EPUB o PDF</b>
-                    <span>{driveEnabled && preferDrive ? "Se guardará en tu carpeta de Google Drive" : "Se guardará en este dispositivo"}</span>
+                    <span>Se guardará en {STORAGE_LABEL[dest].toLowerCase()}</span>
                   </div>
+                </div>
+              )}
+
+              {(newFile || !b.file) && (
+                <div style={{marginTop:12}}>
+                  <label className="lbl">¿Dónde guardar este archivo?</label>
+                  <div className="seg">
+                    <button type="button" className={dest === "local" ? "on" : ""} onClick={() => setDest("local")}>
+                      <Ic.file s={15}/> Este dispositivo
+                    </button>
+                    <button type="button" className={dest === "drive" ? "on" : ""} onClick={() => driveEnabled ? setDest("drive") : toast("Conéctate a Google Drive en Ajustes", "err")} disabled={!driveEnabled}>
+                      <Ic.cloud s={15}/> Google Drive
+                    </button>
+                    <button type="button" className={dest === "dropbox" ? "on" : ""} onClick={() => dropboxEnabled ? setDest("dropbox") : toast("Conéctate a Dropbox en Ajustes", "err")} disabled={!dropboxEnabled}>
+                      <Ic.cloud s={15}/> Dropbox
+                    </button>
+                  </div>
+                  {(!driveEnabled || !dropboxEnabled) && (
+                    <p className="muted" style={{fontSize:12, marginTop:8, lineHeight:1.5}}>
+                      {!driveEnabled && !dropboxEnabled ? "Conéctate a Drive o Dropbox en Ajustes para guardar en la nube."
+                        : (!driveEnabled ? "Conéctate a Google Drive en Ajustes para usarlo." : "Conéctate a Dropbox en Ajustes para usarlo.")}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -1084,7 +1237,7 @@ function BookForm({ initial, driveEnabled, preferDrive, onSave, onClose, toast }
         </div>
         <div className="modal-foot">
           <button className="btn btn-ghost" onClick={onClose} disabled={saving}>Cancelar</button>
-          <button className="btn btn-primary" onClick={save} disabled={saving}>
+          <button className="btn btn-primary" onClick={save} disabled={saving || reading}>
             {saving ? <><Ic.loader/> {progress || "Guardando…"}</> : <><Ic.check/> Guardar libro</>}
           </button>
         </div>
@@ -1104,15 +1257,8 @@ function BookDetail({ book, onClose, onEdit, onDelete, onRead, toast }) {
     if (!book.file) return;
     setBusy(true);
     try {
-      let blob;
-      if (book.file.storage === "drive") {
-        if (book.file.driveLink) { window.open(book.file.driveLink, "_blank"); setBusy(false); return; }
-        blob = await Drive.download(book.file.driveFileId);
-      } else {
-        const rec = await DB.getFile(book.id);
-        if (!rec) throw new Error("El archivo no se encontró en este dispositivo");
-        blob = rec.blob;
-      }
+      if (book.file.storage === "drive" && book.file.driveLink) { window.open(book.file.driveLink, "_blank"); setBusy(false); return; }
+      const blob = await getBookBlob(book);
       const url = URL.createObjectURL(blob);
       window.open(url, "_blank");
       setTimeout(() => URL.revokeObjectURL(url), 60000);
@@ -1124,9 +1270,7 @@ function BookDetail({ book, onClose, onEdit, onDelete, onRead, toast }) {
     if (!book.file) return;
     setBusy(true);
     try {
-      let blob;
-      if (book.file.storage === "drive") blob = await Drive.download(book.file.driveFileId);
-      else { const rec = await DB.getFile(book.id); if (!rec) throw new Error("Archivo no encontrado"); blob = rec.blob; }
+      const blob = await getBookBlob(book);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url; a.download = book.file.fileName || (book.title + (fmt === "PDF" ? ".pdf" : ".epub"));
@@ -1159,7 +1303,9 @@ function BookDetail({ book, onClose, onEdit, onDelete, onRead, toast }) {
             </div>
             <div className="detail-main">
               <h1>{book.title}</h1>
-              <div className="by">{book.author || "Autor desconocido"}</div>
+              <div className="by">{book.author || "Autor desconocido"}{book.status === "unread"
+                ? <span className="chip badge-unread" style={{marginLeft:10, verticalAlign:"middle"}}>Por leer</span>
+                : <span className="chip chip-accent" style={{marginLeft:10, verticalAlign:"middle"}}>Leído</span>}</div>
               {book.rating ? <Stars value={book.rating} size={20} /> : <span className="muted">Sin calificación</span>}
 
               <div className="detail-facts">
@@ -1188,7 +1334,7 @@ function BookDetail({ book, onClose, onEdit, onDelete, onRead, toast }) {
                     <Ic.download s={16}/> Descargar
                   </button>
                   <span className="chip" style={{alignSelf:"center"}}>
-                    {book.file.storage === "drive" ? "Google Drive" : "En este dispositivo"} · {fmtSize(book.file.fileSize)}
+                    {(STORAGE_LABEL[book.file.storage] || "En este dispositivo")} · {fmtSize(book.file.fileSize)}
                   </span>
                 </div>
               )}
@@ -1215,11 +1361,15 @@ function BookDetail({ book, onClose, onEdit, onDelete, onRead, toast }) {
    AJUSTES — Google Drive + exportar/importar JSON
    ============================================================ */
 function Settings({ clientId, setClientId, driveConnected, connectDrive, disconnectDrive,
-                    preferDrive, setPreferDrive, onExport, onImport, onClose, exporting, importing,
+                    dropboxKey, setDropboxKey, dropboxConnected, connectDropbox, disconnectDropbox,
+                    defaultStorage, setDefaultStorage,
+                    onExport, onImport, onClose, exporting, importing,
                     autoSync, setAutoSync, syncing, lastSync, syncNow }) {
   const [cid, setCid] = useState(clientId);
+  const [dbx, setDbx] = useState(dropboxKey);
   const importRef = useRef();
   const lastTxt = lastSync ? new Date(lastSync).toLocaleString("es", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) : null;
+  const redirectUri = location.origin + location.pathname;
 
   return (
     <div className="backdrop" onClick={onClose}>
@@ -1231,8 +1381,18 @@ function Settings({ clientId, setClientId, driveConnected, connectDrive, disconn
         <div className="modal-body">
 
           <div className="set-block">
+            <h3><Ic.file s={18}/> Dónde guardar los libros</h3>
+            <p className="desc">Elige el destino por defecto al subir un archivo. En cada libro podrás cambiarlo. Útil si se te llena un servicio: repartes entre este dispositivo, Drive y Dropbox.</p>
+            <div className="seg">
+              <button className={defaultStorage === "local" ? "on" : ""} onClick={() => setDefaultStorage("local")}><Ic.file s={15}/> Este dispositivo</button>
+              <button className={defaultStorage === "drive" ? "on" : ""} onClick={() => driveConnected ? setDefaultStorage("drive") : null} disabled={!driveConnected}><Ic.cloud s={15}/> Google Drive</button>
+              <button className={defaultStorage === "dropbox" ? "on" : ""} onClick={() => dropboxConnected ? setDefaultStorage("dropbox") : null} disabled={!dropboxConnected}><Ic.cloud s={15}/> Dropbox</button>
+            </div>
+          </div>
+
+          <div className="set-block">
             <h3><Ic.cloud s={18}/> Google Drive</h3>
-            <p className="desc">Guarda los archivos EPUB/PDF en una carpeta de tu Drive («{DRIVE_FOLDER_NAME}»). Pega tu Client ID de Google una sola vez.</p>
+            <p className="desc">Guarda los archivos EPUB/PDF en una carpeta de tu Drive («{DRIVE_FOLDER_NAME}»). El Client ID ya viene incluido en la app.</p>
             <label className="lbl">Client ID de Google</label>
             <input className="inp" value={cid} onChange={e => setCid(e.target.value.trim())}
                    placeholder="xxxx.apps.googleusercontent.com" style={{marginBottom:12}} />
@@ -1248,16 +1408,30 @@ function Settings({ clientId, setClientId, driveConnected, connectDrive, disconn
                 ? <button className="btn btn-primary btn-sm" onClick={connectDrive} disabled={!clientId}><Ic.cloud s={16}/> Conectar Drive</button>
                 : <button className="btn btn-ghost btn-sm" onClick={disconnectDrive}>Desconectar</button>}
             </div>
-            <div className="row-toggle" style={{marginTop:8}}>
-              <div className="rt-txt">
-                <b>Guardar archivos nuevos en Drive</b>
-                <span>Si se desactiva, se guardan en este dispositivo.</span>
-              </div>
-              <label className="switch">
-                <input type="checkbox" checked={preferDrive} onChange={e => setPreferDrive(e.target.checked)} disabled={!driveConnected} />
-                <span className="sl"></span>
-              </label>
+          </div>
+
+          <div className="set-block">
+            <h3><Ic.cloud s={18}/> Dropbox</h3>
+            <p className="desc">Tercer destino para tus archivos. Crea una app en dropbox.com/developers (tipo «Scoped access», acceso «App folder», permisos files.content.write y files.content.read) y pega aquí su App key.</p>
+            <label className="lbl">App key de Dropbox</label>
+            <input className="inp" value={dbx} onChange={e => setDbx(e.target.value.trim())}
+                   placeholder="ej: a1b2c3d4e5f6g7h" style={{marginBottom:12}} />
+            <div style={{display:"flex", gap:8, flexWrap:"wrap", marginBottom:14}}>
+              <button className="btn btn-ghost btn-sm" onClick={() => setDropboxKey(dbx)}>Guardar App key</button>
             </div>
+            <div className="drive-status">
+              <span className={"dot " + (dropboxConnected ? "on" : "off")}></span>
+              {dropboxConnected ? "Conectado a Dropbox" : (dbx ? "Sin conectar" : "Falta la App key")}
+            </div>
+            <div style={{display:"flex", gap:8, flexWrap:"wrap"}}>
+              {!dropboxConnected
+                ? <button className="btn btn-primary btn-sm" onClick={connectDropbox} disabled={!dropboxKey}><Ic.cloud s={16}/> Conectar Dropbox</button>
+                : <button className="btn btn-ghost btn-sm" onClick={disconnectDropbox}>Desconectar</button>}
+            </div>
+            <p className="muted" style={{fontSize:12, marginTop:12, lineHeight:1.5}}>
+              En la configuración de tu app de Dropbox agrega esta Redirect URI exacta:<br/>
+              <span style={{color:"var(--ink-soft)", wordBreak:"break-all"}}>{redirectUri}</span>
+            </p>
           </div>
 
           <div className="set-block">
@@ -1281,7 +1455,7 @@ function Settings({ clientId, setClientId, driveConnected, connectDrive, disconn
               </div>
             )}
             <p className="muted" style={{fontSize:12, marginTop:12, lineHeight:1.5}}>
-              Para que los EPUB/PDF también se vean en los otros dispositivos, mantén activado «Guardar archivos nuevos en Drive». Los archivos guardados solo localmente no viajan.
+              Para que los EPUB/PDF también se vean en los otros dispositivos, guárdalos en Google Drive o Dropbox (arriba eliges el destino). Los archivos guardados solo en este dispositivo no viajan.
             </p>
           </div>
 
@@ -1374,9 +1548,7 @@ function EpubReader({ book, onClose, onSaveCfi, toast }) {
     (async () => {
       try {
         await ensureEpub();
-        let blob;
-        if (book.file.storage === "drive") blob = await Drive.download(book.file.driveFileId);
-        else { const rec = await DB.getFile(book.id); if (!rec) throw new Error("El archivo no está en este dispositivo. Ábrelo en el dispositivo donde lo guardaste o actívalo en Drive."); blob = rec.blob; }
+        const blob = await getBookBlob(book);
         if (cancelled) return;
         const buf = await blob.arrayBuffer();
         const epub = window.ePub(buf);
@@ -1461,6 +1633,7 @@ function App() {
   const [loaded, setLoaded] = useState(false);
   const [query, setQuery] = useState("");
   const [genreF, setGenreF] = useState("");
+  const [statusF, setStatusF] = useState("all");   // all | read | unread
   const [sort, setSort] = useState("recent");
   const [view, setView] = useState("grid");
 
@@ -1474,7 +1647,9 @@ function App() {
 
   const [clientId, setClientIdState] = useState(DRIVE_CLIENT_ID);
   const [driveConnected, setDriveConnected] = useState(false);
-  const [preferDrive, setPreferDriveState] = useState(false);
+  const [dropboxKey, setDropboxKeyState] = useState("");
+  const [dropboxConnected, setDropboxConnected] = useState(false);
+  const [defaultStorage, setDefaultStorageState] = useState("local");
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [autoSync, setAutoSyncState] = useState(false);
@@ -1497,21 +1672,26 @@ function App() {
   useEffect(() => {
     (async () => {
       try {
-        const [bks, cid, pref, auto, tomb, last] = await Promise.all([
-          DB.getAllBooks(), DB.getSetting("driveClientId"), DB.getSetting("preferDrive"),
+        // Captura el token de Dropbox si venimos de su redirección (antes de cualquier otra cosa)
+        const dbxBack = Dropbox.captureFromHash();
+        const [bks, cid, defStore, auto, tomb, last, dbxKey] = await Promise.all([
+          DB.getAllBooks(), DB.getSetting("driveClientId"), DB.getSetting("defaultStorage"),
           DB.getSetting("autoSync"), DB.getSetting("tombstones"), DB.getSetting("lastSync"),
+          DB.getSetting("dropboxAppKey"),
         ]);
         setBooks(bks || []);
         booksRef.current = bks || [];
         tombRef.current = tomb || [];
         if (last) setLastSync(last);
+        if (defStore) setDefaultStorageState(defStore);
+        if (dbxKey) { setDropboxKeyState(dbxKey); Dropbox.setKey(dbxKey); }
+        if (dbxBack) { setDropboxConnected(true); toast("Conectado a Dropbox", "ok"); }
         const useCid = (DRIVE_CLIENT_ID || cid || "").trim();
         if (useCid) {
           setClientIdState(useCid);
           Drive.init(useCid);
           if (useCid !== cid) DB.setSetting("driveClientId", useCid); // corrige un ID viejo/roto guardado en este dispositivo
         }
-        if (pref) setPreferDriveState(true);
         if (auto) { setAutoSyncState(true); if (useCid) tryAutoSync(useCid); }
       } catch (e) {
         toast("No se pudo abrir la base de datos local", "err");
@@ -1619,7 +1799,22 @@ function App() {
     if (cid && Drive.init(cid)) toast("Client ID guardado");
     else if (cid) toast("Client ID guardado (se activará al abrir la app publicada)", "ok");
   }
-  function setPreferDrive(v) { setPreferDriveState(v); DB.setSetting("preferDrive", v); }
+  function setDefaultStorage(v) { setDefaultStorageState(v); DB.setSetting("defaultStorage", v); }
+
+  function setDropboxKey(k) {
+    const key = (k || "").trim();
+    setDropboxKeyState(key); DB.setSetting("dropboxAppKey", key);
+    Dropbox.setKey(key); Dropbox.clear(); setDropboxConnected(false);
+    if (key) toast("App key de Dropbox guardada");
+  }
+  function connectDropbox() {
+    try {
+      if (!dropboxKey) { toast("Primero pega tu App key de Dropbox", "err"); return; }
+      Dropbox.setKey(dropboxKey);
+      Dropbox.connect();   // redirige a Dropbox y vuelve con el token
+    } catch (e) { toast(e.message || "No se pudo iniciar Dropbox", "err"); }
+  }
+  function disconnectDropbox() { Dropbox.clear(); setDropboxConnected(false); if (defaultStorage === "dropbox") setDefaultStorage("local"); toast("Sesión de Dropbox cerrada"); }
 
   async function connectDrive() {
     try {
@@ -1632,7 +1827,7 @@ function App() {
       if (autoSync) await syncFromDrive({ silent: false });
     } catch (e) { toast(e.message || "No se pudo conectar a Drive", "err"); }
   }
-  function disconnectDrive() { Drive.clearToken(); setDriveConnected(false); setPreferDrive(false); toast("Sesión de Drive cerrada"); }
+  function disconnectDrive() { Drive.clearToken(); setDriveConnected(false); if (defaultStorage === "drive") setDefaultStorage("local"); toast("Sesión de Drive cerrada"); }
 
   function upsertBook(rec) {
     setBooks(prev => {
@@ -1663,6 +1858,7 @@ function App() {
       if (book.file) {
         if (book.file.storage === "local") await DB.deleteFile(book.id);
         else if (book.file.storage === "drive" && book.file.driveFileId) await Drive.remove(book.file.driveFileId);
+        else if (book.file.storage === "dropbox" && (book.file.dropboxPath || book.file.dropboxId)) await Dropbox.remove(book.file.dropboxPath || book.file.dropboxId);
       }
       await DB.deleteBook(book.id);
       tombRef.current = [...tombRef.current.filter(t => t.id !== book.id), { id: book.id, at: Date.now() }];
@@ -1740,6 +1936,8 @@ function App() {
     const q = query.trim().toLowerCase();
     if (q) r = r.filter(b => (b.title + " " + b.author + " " + (b.genre||"")).toLowerCase().includes(q));
     if (genreF) r = r.filter(b => b.genre === genreF);
+    if (statusF === "read") r = r.filter(b => b.status !== "unread");
+    if (statusF === "unread") r = r.filter(b => b.status === "unread");
     const s = [...r];
     s.sort((a, b) => {
       if (sort === "recent") return (b.dateAdded||0) - (a.dateAdded||0);
@@ -1750,15 +1948,21 @@ function App() {
       return 0;
     });
     return s;
-  }, [books, query, genreF, sort]);
+  }, [books, query, genreF, statusF, sort]);
+
+  // Separa lo filtrado en por leer / leídos
+  const groups = useMemo(() => ({
+    unread: filtered.filter(b => b.status === "unread"),
+    read: filtered.filter(b => b.status !== "unread"),
+  }), [filtered]);
 
   const stats = useMemo(() => {
     const total = books.length;
-    const withFile = books.filter(b => b.file).length;
+    const unread = books.filter(b => b.status === "unread").length;
     const rated = books.filter(b => b.rating);
     const avg = rated.length ? (rated.reduce((s,b) => s + b.rating, 0) / rated.length) : 0;
     const genres = new Set(books.map(b => b.genre).filter(Boolean)).size;
-    return { total, withFile, avg, genres };
+    return { total, read: total - unread, unread, avg, genres };
   }, [books]);
 
   const usedGenres = useMemo(() => {
@@ -1771,6 +1975,10 @@ function App() {
       <div style={{textAlign:"center"}}><Ic.loader s={30}/><p style={{marginTop:14}}>Abriendo tu biblioteca…</p></div>
     </div>;
   }
+
+  const renderCollection = (arr) => view === "grid"
+    ? <div className="grid">{arr.map(b => <BookCard key={b.id} book={b} onOpen={setDetail} />)}</div>
+    : <div className="list">{arr.map(b => <BookRow key={b.id} book={b} onOpen={setDetail} />)}</div>;
 
   return (
     <>
@@ -1796,10 +2004,10 @@ function App() {
 
       <main className="wrap">
         <div className="stats">
-          <div className="stat"><b>{stats.total}</b><span>Libros leídos</span><div className="spark"><Ic.book s={54}/></div></div>
-          <div className="stat"><b>{stats.withFile}</b><span>Con archivo</span><div className="spark"><Ic.file s={54}/></div></div>
+          <div className="stat"><b>{stats.total}</b><span>En tu biblioteca</span><div className="spark"><Ic.books s={52}/></div></div>
+          <div className="stat"><b>{stats.read}</b><span>Leídos</span><div className="spark"><Ic.check s={50}/></div></div>
+          <div className="stat"><b>{stats.unread}</b><span>Por leer</span><div className="spark"><Ic.bookOpen s={48}/></div></div>
           <div className="stat"><b>{stats.avg ? stats.avg.toFixed(1) : "—"}</b><span>Calificación media</span><div className="spark"><Ic.star s={54} fill/></div></div>
-          <div className="stat"><b>{stats.genres}</b><span>Géneros</span><div className="spark"><Ic.grid s={50}/></div></div>
         </div>
 
         {books.length > 0 && (
@@ -1807,6 +2015,11 @@ function App() {
             <div className="search">
               <Ic.search />
               <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Buscar por título, autor o género…" />
+            </div>
+            <div className="seg" style={{padding:4}}>
+              <button className={statusF === "all" ? "on" : ""} onClick={() => setStatusF("all")}>Todos</button>
+              <button className={statusF === "read" ? "on" : ""} onClick={() => setStatusF("read")}>Leídos</button>
+              <button className={statusF === "unread" ? "on" : ""} onClick={() => setStatusF("unread")}>Por leer</button>
             </div>
             <select className="field-select" value={genreF} onChange={e => setGenreF(e.target.value)}>
               <option value="">Todos los géneros</option>
@@ -1830,7 +2043,7 @@ function App() {
           <div className="empty">
             <div className="em-ic"><Ic.books s={30} /></div>
             <h3>Tu biblioteca está vacía</h3>
-            <p>Registra los libros que ya leíste, guarda su portada y adjunta el EPUB o PDF. Todo queda en tu dispositivo y puedes respaldarlo cuando quieras.</p>
+            <p>Registra tus libros, marca si ya los leíste o están por leer, guarda su portada y adjunta el EPUB o PDF. Todo queda en tu dispositivo y puedes respaldarlo cuando quieras.</p>
             <button className="btn btn-primary" onClick={() => { setEditing(null); setShowForm(true); }}><Ic.plus s={18}/> Agregar mi primer libro</button>
           </div>
         ) : filtered.length === 0 ? (
@@ -1838,24 +2051,30 @@ function App() {
             <div className="em-ic"><Ic.search s={26} /></div>
             <h3>Sin resultados</h3>
             <p>No hay libros que coincidan con tu búsqueda. Prueba con otro término o quita los filtros.</p>
-            <button className="btn btn-ghost" onClick={() => { setQuery(""); setGenreF(""); }}>Limpiar filtros</button>
+            <button className="btn btn-ghost" onClick={() => { setQuery(""); setGenreF(""); setStatusF("all"); }}>Limpiar filtros</button>
           </div>
-        ) : view === "grid" ? (
-          <div className="grid">
-            {filtered.map(b => <BookCard key={b.id} book={b} onOpen={setDetail} />)}
-          </div>
-        ) : (
-          <div className="list">
-            {filtered.map(b => <BookRow key={b.id} book={b} onOpen={setDetail} />)}
-          </div>
-        )}
+        ) : (statusF === "all" && groups.unread.length > 0 && groups.read.length > 0) ? (
+          <>
+            <div className="section-head">
+              <div className="sh-ic" style={{background:"rgba(127,176,224,.14)", color:"#8fbce8"}}><Ic.bookOpen s={16}/></div>
+              <h2>Por leer</h2><span className="count">{groups.unread.length}</span><div className="line"/>
+            </div>
+            {renderCollection(groups.unread)}
+            <div className="section-head">
+              <div className="sh-ic" style={{background:"var(--accent-dim)", color:"var(--accent)"}}><Ic.check s={16}/></div>
+              <h2>Leídos</h2><span className="count">{groups.read.length}</span><div className="line"/>
+            </div>
+            {renderCollection(groups.read)}
+          </>
+        ) : renderCollection(filtered)}
       </main>
 
       {showForm && (
         <BookForm
           initial={editing}
           driveEnabled={driveConnected}
-          preferDrive={preferDrive}
+          dropboxEnabled={dropboxConnected}
+          defaultStorage={defaultStorage}
           onSave={upsertBook}
           onClose={() => { setShowForm(false); setEditing(null); }}
           toast={toast}
@@ -1896,7 +2115,9 @@ function App() {
         <Settings
           clientId={clientId} setClientId={setClientId}
           driveConnected={driveConnected} connectDrive={connectDrive} disconnectDrive={disconnectDrive}
-          preferDrive={preferDrive} setPreferDrive={setPreferDrive}
+          dropboxKey={dropboxKey} setDropboxKey={setDropboxKey}
+          dropboxConnected={dropboxConnected} connectDropbox={connectDropbox} disconnectDropbox={disconnectDropbox}
+          defaultStorage={defaultStorage} setDefaultStorage={setDefaultStorage}
           onExport={exportJSON} onImport={importJSON}
           exporting={exporting} importing={importing}
           autoSync={autoSync} setAutoSync={setAutoSync}
