@@ -890,18 +890,38 @@ async function extractEpubMeta(file) {
   const dateRaw = dcText(doc, "date");
   const year = (dateRaw.match(/\d{4}/) || [])[0] || "";
   const publisher = dcText(doc, "publisher");
-  // Estimación de páginas: cuenta palabras del contenido (≈300 por página)
-  let words = 0;
+
+  // Descripción / sinopsis incrustada en el propio EPUB
+  let description = dcText(doc, "description");
+  if (description) {
+    description = description.replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&").replace(/&[a-z]+;/gi, " ").replace(/\s+/g, " ").trim();
+  }
+
+  // Estimación de páginas + muestra del texto (en orden del spine, saltando preliminares)
+  let words = 0, sample = "";
   try {
-    const htmlFiles = Object.keys(zip.files).filter(n => /\.x?html?$/i.test(n));
-    for (const n of htmlFiles) {
-      const txt = await zip.file(n).async("string");
-      const plain = txt.replace(/<[^>]+>/g, " ").replace(/&[a-z]+;/gi, " ");
+    const opfDir = opfPath.includes("/") ? opfPath.slice(0, opfPath.lastIndexOf("/") + 1) : "";
+    const manifest = {};
+    doc.querySelectorAll("manifest > item").forEach(it => { manifest[it.getAttribute("id")] = it.getAttribute("href"); });
+    const spine = Array.from(doc.querySelectorAll("spine > itemref")).map(r => r.getAttribute("idref"));
+    const order = spine.length ? spine.map(id => manifest[id]).filter(Boolean)
+      : Object.keys(zip.files).filter(n => /\.x?html?$/i.test(n));
+    const skip = /(cover|title|copyright|toc|nav|index|colophon|dedicat|acknowledg|credit|legal)/i;
+    for (const href of order) {
+      const path = href.startsWith(opfDir) ? href : (opfDir + href).replace(/^\.\//, "");
+      const f = zip.file(path) || zip.file(decodeURIComponent(path));
+      if (!f) continue;
+      const txt = await f.async("string");
+      const plain = txt.replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/&[a-z]+;/gi, " ").replace(/\s+/g, " ").trim();
       words += (plain.match(/\S+/g) || []).length;
+      if (sample.length < 2600 && !skip.test(href) && plain.length > 200) {
+        sample += (sample ? "\n\n" : "") + plain.slice(0, 2600 - sample.length);
+      }
     }
   } catch (e) {}
   const pages = words ? String(Math.max(1, Math.round(words / 300))) : "";
-  return { title, author, year, publisher, pages, pagesApprox: !!words };
+  return { title, author, year, publisher, description, sample, pages, pagesApprox: !!words };
 }
 
 async function extractPdfMeta(file) {
@@ -918,7 +938,18 @@ async function extractPdfMeta(file) {
     const m = String(cd).match(/D:(\d{4})/) || String(cd).match(/(\d{4})/);
     if (m) year = m[1];
   } catch (e) {}
-  return { title, author, year, pages, pagesApprox: false };
+  // Muestra de texto de las primeras páginas (para generar descripción)
+  let sample = "";
+  try {
+    const max = Math.min(pdf.numPages, 8);
+    for (let i = 1; i <= max && sample.length < 2600; i++) {
+      const page = await pdf.getPage(i);
+      const tc = await page.getTextContent();
+      const t = tc.items.map(it => it.str).join(" ").replace(/\s+/g, " ").trim();
+      if (t.length > 120) sample += (sample ? "\n\n" : "") + t.slice(0, 2600 - sample.length);
+    }
+  } catch (e) {}
+  return { title, author, year, description: "", sample, pages, pagesApprox: false };
 }
 
 async function extractMetadata(file) {
@@ -927,6 +958,46 @@ async function extractMetadata(file) {
   if (n.endsWith(".pdf")) return extractPdfMeta(file);
   return {};
 }
+
+/* ============================================================
+   IA (opcional) — genera una descripción con tu propia API key
+   ============================================================ */
+const AI = (() => {
+  let key = "";
+  function setKey(k) { key = (k || "").trim(); }
+  function isConfigured() { return !!key; }
+  async function generateSynopsis({ title, author, sample }) {
+    if (!key) throw new Error("Configura tu API key de Anthropic en Ajustes para generar descripciones.");
+    if (!sample || sample.length < 120) throw new Error("No hay suficiente texto del libro para generar la descripción.");
+    const prompt = "A partir de este fragmento del inicio de un libro, escribe una descripción breve (2 a 3 oraciones) en español que explique de qué trata, con un tono neutral de contraportada. No inventes datos que no estén sugeridos por el texto y no incluyas encabezados ni comillas.\n\n"
+      + "Título: " + (title || "(desconocido)") + "\nAutor: " + (author || "(desconocido)") + "\n\nFragmento:\n\"\"\"\n" + sample.slice(0, 2400) + "\n\"\"\"";
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 320,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    if (!r.ok) {
+      let msg = "Error de la API (" + r.status + ")";
+      try { const e = await r.json(); if (e.error && e.error.message) msg = e.error.message; } catch (x) {}
+      if (r.status === 401) msg = "API key de Anthropic inválida. Revísala en Ajustes.";
+      throw new Error(msg);
+    }
+    const d = await r.json();
+    const text = (d.content || []).filter(b => b.type === "text").map(b => b.text).join(" ").trim();
+    if (!text) throw new Error("La IA no devolvió texto.");
+    return text;
+  }
+  return { setKey, isConfigured, generateSynopsis };
+})();
 
 /* ============================================================
    COMPONENTES pequeños
@@ -1015,10 +1086,10 @@ function BookRow({ book, onOpen }) {
 /* ============================================================
    FORMULARIO agregar/editar
    ============================================================ */
-function BookForm({ initial, driveEnabled, dropboxEnabled, defaultStorage, onSave, onClose, toast }) {
+function BookForm({ initial, driveEnabled, dropboxEnabled, defaultStorage, aiEnabled, onSave, onClose, toast }) {
   const [b, setB] = useState(() => initial || {
     id: uid(), title: "", author: "", genre: "", year: "", pages: "",
-    readDate: new Date().toISOString().slice(0,10), rating: 0, review: "",
+    readDate: new Date().toISOString().slice(0,10), rating: 0, review: "", synopsis: "",
     cover: "", file: null, status: "read", dateAdded: Date.now(),
   });
   const [newFile, setNewFile] = useState(null);       // File pendiente de guardar
@@ -1030,6 +1101,8 @@ function BookForm({ initial, driveEnabled, dropboxEnabled, defaultStorage, onSav
   const [saving, setSaving] = useState(false);
   const [progress, setProgress] = useState("");
   const [reading, setReading] = useState(false);       // leyendo metadatos del archivo
+  const [genAI, setGenAI] = useState(false);           // generando descripción con IA
+  const sampleRef = useRef("");                        // muestra de texto para la IA
   const coverRef = useRef(), fileRef = useRef();
   const set = (k, v) => setB(p => ({ ...p, [k]: v }));
 
@@ -1039,6 +1112,16 @@ function BookForm({ initial, driveEnabled, dropboxEnabled, defaultStorage, onSav
     catch { toast("No se pudo procesar la imagen", "err"); }
   }
 
+  async function runAI(sample) {
+    setGenAI(true);
+    try {
+      const txt = await AI.generateSynopsis({ title: b.title, author: b.author, sample });
+      setB(p => ({ ...p, synopsis: txt }));
+      toast("Descripción generada con IA", "ok");
+    } catch (e) { toast(e.message || "No se pudo generar la descripción", "err"); }
+    finally { setGenAI(false); }
+  }
+
   async function pickFile(e) {
     const f = e.target.files[0]; if (!f) return;
     const ok = /\.(epub|pdf)$/i.test(f.name);
@@ -1046,20 +1129,28 @@ function BookForm({ initial, driveEnabled, dropboxEnabled, defaultStorage, onSav
     setNewFile(f); setRemoveFile(false);
     // Lee datos del archivo y rellena solo los campos que estén vacíos
     setReading(true);
+    let meta = {};
     try {
-      const meta = await extractMetadata(f);
+      meta = await extractMetadata(f);
+      sampleRef.current = meta.sample || "";
+      const hadSynopsis = !!b.synopsis.trim();
       setB(p => {
         const n = { ...p };
         if (!p.title.trim() && meta.title) n.title = meta.title;
         if (!p.author.trim() && meta.author) n.author = meta.author;
         if (!p.year && meta.year) n.year = meta.year;
         if (!p.pages && meta.pages) n.pages = meta.pages;
+        if (!p.synopsis.trim() && meta.description) n.synopsis = meta.description;
         return n;
       });
       if (meta.title || meta.author || meta.year || meta.pages) {
         toast(meta.pagesApprox ? "Datos tomados del archivo (páginas aproximadas)" : "Datos tomados del archivo", "ok");
-      } else {
-        toast("El archivo no traía datos; complétalos a mano", "ok");
+      }
+      // Si no traía descripción incrustada y la IA está activa, la genera del texto
+      if (!hadSynopsis && !meta.description && aiEnabled && meta.sample) {
+        await runAI(meta.sample);
+      } else if (meta.description) {
+        toast("Descripción tomada del EPUB", "ok");
       }
     } catch (err) {
       toast("No se pudieron leer los datos del archivo", "err");
@@ -1182,6 +1273,22 @@ function BookForm({ initial, driveEnabled, dropboxEnabled, defaultStorage, onSav
             <div className="full">
               <label className="lbl">Mi calificación</label>
               <RateInput value={b.rating} onChange={v => set("rating", v)} />
+            </div>
+            <div className="full">
+              <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, marginBottom:7, flexWrap:"wrap"}}>
+                <label className="lbl" style={{marginBottom:0}}>Descripción / sinopsis</label>
+                <button type="button" className="btn btn-ghost btn-sm"
+                  onClick={() => {
+                    if (!aiEnabled) { toast("Configura tu API key de Anthropic en Ajustes para usar la IA", "err"); return; }
+                    if (!sampleRef.current) { toast("Adjunta primero el EPUB/PDF para tomar texto del libro", "err"); return; }
+                    runAI(sampleRef.current);
+                  }}
+                  disabled={genAI || reading}>
+                  {genAI ? <><Ic.loader s={15}/> Generando…</> : <><Ic.book s={15}/> Generar con IA</>}
+                </button>
+              </div>
+              <textarea className="inp" value={b.synopsis} onChange={e => set("synopsis", e.target.value)}
+                placeholder="Se toma automáticamente del EPUB al adjuntarlo. También puedes escribirla o generarla con IA." />
             </div>
             <div className="full">
               <label className="lbl">Reseña / notas</label>
@@ -1341,6 +1448,13 @@ function BookDetail({ book, onClose, onEdit, onDelete, onRead, toast }) {
             </div>
           </div>
 
+          {book.synopsis && (
+            <div className="review">
+              <div className="k">Descripción</div>
+              <p>{book.synopsis}</p>
+            </div>
+          )}
+
           {book.review && (
             <div className="review">
               <div className="k">Reseña</div>
@@ -1363,10 +1477,12 @@ function BookDetail({ book, onClose, onEdit, onDelete, onRead, toast }) {
 function Settings({ clientId, setClientId, driveConnected, connectDrive, disconnectDrive,
                     dropboxKey, setDropboxKey, dropboxConnected, connectDropbox, disconnectDropbox,
                     defaultStorage, setDefaultStorage,
+                    aiKey, setAiKey,
                     onExport, onImport, onClose, exporting, importing,
                     autoSync, setAutoSync, syncing, lastSync, syncNow }) {
   const [cid, setCid] = useState(clientId);
   const [dbx, setDbx] = useState(dropboxKey);
+  const [aik, setAik] = useState(aiKey);
   const importRef = useRef();
   const lastTxt = lastSync ? new Date(lastSync).toLocaleString("es", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) : null;
   const redirectUri = location.origin + location.pathname;
@@ -1431,6 +1547,21 @@ function Settings({ clientId, setClientId, driveConnected, connectDrive, disconn
             <p className="muted" style={{fontSize:12, marginTop:12, lineHeight:1.5}}>
               En la configuración de tu app de Dropbox agrega esta Redirect URI exacta:<br/>
               <span style={{color:"var(--ink-soft)", wordBreak:"break-all"}}>{redirectUri}</span>
+            </p>
+          </div>
+
+          <div className="set-block">
+            <h3><Ic.book s={18}/> Descripción automática con IA (opcional)</h3>
+            <p className="desc">Para los libros que no traen sinopsis incrustada, la app puede generar una descripción a partir del inicio del texto usando tu propia API key de Anthropic. Si no la configuras, la descripción se toma igual del EPUB cuando exista.</p>
+            <label className="lbl">API key de Anthropic</label>
+            <input className="inp" type="password" value={aik} onChange={e => setAik(e.target.value.trim())}
+                   placeholder="sk-ant-..." style={{marginBottom:12}} />
+            <div style={{display:"flex", gap:8, flexWrap:"wrap", alignItems:"center"}}>
+              <button className="btn btn-ghost btn-sm" onClick={() => setAiKey(aik)}>Guardar API key</button>
+              {aiKey && <span className="drive-status" style={{margin:0}}><span className="dot on"></span>Activa</span>}
+            </div>
+            <p className="muted" style={{fontSize:12, marginTop:12, lineHeight:1.5}}>
+              La clave se guarda solo en este dispositivo (no se sincroniza ni se incluye en los respaldos). Aun así, evita usar esta app en dispositivos ajenos. Consíguela en console.anthropic.com; el costo por descripción es mínimo.
             </p>
           </div>
 
@@ -1650,6 +1781,7 @@ function App() {
   const [dropboxKey, setDropboxKeyState] = useState("");
   const [dropboxConnected, setDropboxConnected] = useState(false);
   const [defaultStorage, setDefaultStorageState] = useState("local");
+  const [aiKey, setAiKeyState] = useState("");
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [autoSync, setAutoSyncState] = useState(false);
@@ -1674,10 +1806,10 @@ function App() {
       try {
         // Captura el token de Dropbox si venimos de su redirección (antes de cualquier otra cosa)
         const dbxBack = Dropbox.captureFromHash();
-        const [bks, cid, defStore, auto, tomb, last, dbxKey] = await Promise.all([
+        const [bks, cid, defStore, auto, tomb, last, dbxKey, savedAiKey] = await Promise.all([
           DB.getAllBooks(), DB.getSetting("driveClientId"), DB.getSetting("defaultStorage"),
           DB.getSetting("autoSync"), DB.getSetting("tombstones"), DB.getSetting("lastSync"),
-          DB.getSetting("dropboxAppKey"),
+          DB.getSetting("dropboxAppKey"), DB.getSetting("aiKey"),
         ]);
         setBooks(bks || []);
         booksRef.current = bks || [];
@@ -1685,6 +1817,7 @@ function App() {
         if (last) setLastSync(last);
         if (defStore) setDefaultStorageState(defStore);
         if (dbxKey) { setDropboxKeyState(dbxKey); Dropbox.setKey(dbxKey); }
+        if (savedAiKey) { setAiKeyState(savedAiKey); AI.setKey(savedAiKey); }
         if (dbxBack) { setDropboxConnected(true); toast("Conectado a Dropbox", "ok"); }
         const useCid = (DRIVE_CLIENT_ID || cid || "").trim();
         if (useCid) {
@@ -1800,6 +1933,12 @@ function App() {
     else if (cid) toast("Client ID guardado (se activará al abrir la app publicada)", "ok");
   }
   function setDefaultStorage(v) { setDefaultStorageState(v); DB.setSetting("defaultStorage", v); }
+
+  function setAiKey(k) {
+    const key = (k || "").trim();
+    setAiKeyState(key); DB.setSetting("aiKey", key); AI.setKey(key);
+    if (key) toast("API key guardada");
+  }
 
   function setDropboxKey(k) {
     const key = (k || "").trim();
@@ -2075,6 +2214,7 @@ function App() {
           driveEnabled={driveConnected}
           dropboxEnabled={dropboxConnected}
           defaultStorage={defaultStorage}
+          aiEnabled={!!aiKey}
           onSave={upsertBook}
           onClose={() => { setShowForm(false); setEditing(null); }}
           toast={toast}
@@ -2118,6 +2258,7 @@ function App() {
           dropboxKey={dropboxKey} setDropboxKey={setDropboxKey}
           dropboxConnected={dropboxConnected} connectDropbox={connectDropbox} disconnectDropbox={disconnectDropbox}
           defaultStorage={defaultStorage} setDefaultStorage={setDefaultStorage}
+          aiKey={aiKey} setAiKey={setAiKey}
           onExport={exportJSON} onImport={importJSON}
           exporting={exporting} importing={importing}
           autoSync={autoSync} setAutoSync={setAutoSync}
