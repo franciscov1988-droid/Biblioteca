@@ -759,6 +759,7 @@ const Dropbox = (() => {
 async function getBookBlob(book) {
   const f = book.file;
   if (!f) throw new Error("Este libro no tiene archivo.");
+  if (f.storage === "link") throw new Error("Este libro está guardado como enlace (TeraBox). Usa «Abrir enlace».");
   if (f.storage === "drive") return Drive.download(f.driveFileId);
   if (f.storage === "dropbox") return Dropbox.download(f.dropboxPath || f.dropboxId);
   const rec = await DB.getFile(book.id);
@@ -766,7 +767,7 @@ async function getBookBlob(book) {
   return rec.blob;
 }
 
-const STORAGE_LABEL = { local: "En este dispositivo", drive: "Google Drive", dropbox: "Dropbox" };
+const STORAGE_LABEL = { local: "En este dispositivo", drive: "Google Drive", dropbox: "Dropbox", link: "TeraBox / enlace" };
 
 /* ============================================================
    UTILIDADES
@@ -1039,6 +1040,7 @@ function BookCard({ book, onOpen }) {
           {fmt && <span className="fmt-badge">{fmt}</span>}
           {store === "drive" && <span className="fmt-badge drive-badge">Drive</span>}
           {store === "dropbox" && <span className="fmt-badge drive-badge">Dropbox</span>}
+          {store === "link" && <span className="fmt-badge drive-badge">TeraBox</span>}
         </div>
         {book.cover
           ? <img src={book.cover} alt={book.title} loading="lazy" />
@@ -1077,6 +1079,7 @@ function BookRow({ book, onOpen }) {
           {fmt && <span className="chip chip-accent">{fmt}</span>}
           {store === "drive" && <span className="chip" style={{color:"#7fb0e0"}}>Drive</span>}
           {store === "dropbox" && <span className="chip" style={{color:"#7fb0e0"}}>Dropbox</span>}
+          {store === "link" && <span className="chip" style={{color:"#7fb0e0"}}>TeraBox</span>}
         </div>
       </div>
     </div>
@@ -1098,6 +1101,7 @@ function BookForm({ initial, driveEnabled, dropboxEnabled, defaultStorage, aiEna
     if (initial && initial.file) return initial.file.storage;   // conserva el destino actual
     return defaultStorage || "local";
   });
+  const [linkUrl, setLinkUrl] = useState(() => (initial && initial.file && initial.file.storage === "link" && initial.file.url) || "");
   const [saving, setSaving] = useState(false);
   const [progress, setProgress] = useState("");
   const [reading, setReading] = useState(false);       // leyendo metadatos del archivo
@@ -1159,27 +1163,42 @@ function BookForm({ initial, driveEnabled, dropboxEnabled, defaultStorage, aiEna
 
   async function save() {
     if (!b.title.trim()) { toast("El título es obligatorio", "err"); return; }
+    if (dest === "link" && !linkUrl.trim() && !(b.file && b.file.storage === "link")) {
+      toast("Pega el enlace de TeraBox (o del servicio que uses)", "err"); return;
+    }
     setSaving(true);
     try {
       let file = removeFile ? null : b.file;
 
-      // Limpieza del archivo anterior si se reemplaza o elimina
-      if ((newFile || removeFile) && b.file) {
+      // ¿Vamos a fijar un archivo/enlace nuevo?
+      const settingLink = dest === "link" && linkUrl.trim();
+      const buildingNew = !!newFile || !!settingLink;
+
+      // Limpieza del anterior si se reemplaza o elimina
+      if ((buildingNew || removeFile) && b.file) {
         if (b.file.storage === "local") await DB.deleteFile(b.id);
         else if (b.file.storage === "drive" && b.file.driveFileId) await Drive.remove(b.file.driveFileId);
         else if (b.file.storage === "dropbox" && (b.file.dropboxPath || b.file.dropboxId)) await Dropbox.remove(b.file.dropboxPath || b.file.dropboxId);
+        // link: no hay nada que borrar en el servicio externo
       }
 
-      if (newFile) {
+      if (settingLink) {
+        const url = linkUrl.trim();
+        const ft = /\.epub(\?|#|$)/i.test(url) ? "application/epub+zip" : (/\.pdf(\?|#|$)/i.test(url) ? "application/pdf" : "");
+        file = {
+          storage: "link", url,
+          fileName: (newFile && newFile.name) || (b.file && b.file.fileName) || "Enlace externo",
+          fileType: (newFile && newFile.type) || ft, fileSize: 0,
+        };
+      } else if (newFile) {
         const common = { fileName: newFile.name, fileType: newFile.type, fileSize: newFile.size };
-        let target = dest;
-        if (target === "drive" && !driveEnabled) throw new Error("Conéctate a Google Drive o elige otro destino.");
-        if (target === "dropbox" && !dropboxEnabled) throw new Error("Conéctate a Dropbox o elige otro destino.");
-        if (target === "drive") {
+        if (dest === "drive" && !driveEnabled) throw new Error("Conéctate a Google Drive o elige otro destino.");
+        if (dest === "dropbox" && !dropboxEnabled) throw new Error("Conéctate a Dropbox o elige otro destino.");
+        if (dest === "drive") {
           setProgress("Subiendo a Google Drive…");
           const up = await Drive.upload(newFile, newFile.name, newFile.type);
           file = { storage: "drive", driveFileId: up.id, driveLink: up.webViewLink, ...common };
-        } else if (target === "dropbox") {
+        } else if (dest === "dropbox") {
           setProgress("Subiendo a Dropbox…");
           const up = await Dropbox.upload(newFile, newFile.name);
           file = { storage: "dropbox", dropboxId: up.dropboxId, dropboxPath: up.dropboxPath, ...common };
@@ -1298,7 +1317,22 @@ function BookForm({ initial, driveEnabled, dropboxEnabled, defaultStorage, aiEna
             <div className="full">
               <label className="lbl">Archivo del libro (EPUB o PDF)</label>
               <input ref={fileRef} type="file" accept=".epub,.pdf,application/pdf,application/epub+zip" className="hidden" onChange={pickFile} />
-              {curFile ? (
+
+              {dest === "link" ? (
+                <>
+                  <input className="inp" value={linkUrl} onChange={e => setLinkUrl(e.target.value)} placeholder="Pega aquí el enlace de TeraBox (o de otro servicio)" style={{marginBottom:10}} />
+                  {curFile && !newFile && b.file.storage !== "link" && (
+                    <p className="muted" style={{fontSize:12, marginBottom:10}}>Al guardar como enlace se quitará el archivo que tenías en {STORAGE_LABEL[b.file.storage].toLowerCase()}.</p>
+                  )}
+                  <div className="dropzone" onClick={() => fileRef.current.click()} style={{cursor:"pointer"}}>
+                    <div className="dz-ic">{reading ? <Ic.loader /> : <Ic.upload />}</div>
+                    <div className="dz-txt">
+                      <b>{reading ? "Leyendo datos…" : "Adjuntar EPUB (opcional)"}</b>
+                      <span>Solo para autocompletar título, autor y descripción. No se guardará; el libro queda en TeraBox.</span>
+                    </div>
+                  </div>
+                </>
+              ) : curFile ? (
                 <div className="dropzone">
                   <div className="dz-ic">{reading ? <Ic.loader /> : <Ic.file />}</div>
                   <div className="dz-txt">
@@ -1317,28 +1351,28 @@ function BookForm({ initial, driveEnabled, dropboxEnabled, defaultStorage, aiEna
                 </div>
               )}
 
-              {(newFile || !b.file) && (
-                <div style={{marginTop:12}}>
-                  <label className="lbl">¿Dónde guardar este archivo?</label>
-                  <div className="seg">
-                    <button type="button" className={dest === "local" ? "on" : ""} onClick={() => setDest("local")}>
-                      <Ic.file s={15}/> Este dispositivo
-                    </button>
-                    <button type="button" className={dest === "drive" ? "on" : ""} onClick={() => driveEnabled ? setDest("drive") : toast("Conéctate a Google Drive en Ajustes", "err")} disabled={!driveEnabled}>
-                      <Ic.cloud s={15}/> Google Drive
-                    </button>
-                    <button type="button" className={dest === "dropbox" ? "on" : ""} onClick={() => dropboxEnabled ? setDest("dropbox") : toast("Conéctate a Dropbox en Ajustes", "err")} disabled={!dropboxEnabled}>
-                      <Ic.cloud s={15}/> Dropbox
-                    </button>
-                  </div>
-                  {(!driveEnabled || !dropboxEnabled) && (
-                    <p className="muted" style={{fontSize:12, marginTop:8, lineHeight:1.5}}>
-                      {!driveEnabled && !dropboxEnabled ? "Conéctate a Drive o Dropbox en Ajustes para guardar en la nube."
-                        : (!driveEnabled ? "Conéctate a Google Drive en Ajustes para usarlo." : "Conéctate a Dropbox en Ajustes para usarlo.")}
-                    </p>
-                  )}
+              <div style={{marginTop:12}}>
+                <label className="lbl">¿Dónde guardar este libro?</label>
+                <div className="seg">
+                  <button type="button" className={dest === "local" ? "on" : ""} onClick={() => setDest("local")}>
+                    <Ic.file s={15}/> Este dispositivo
+                  </button>
+                  <button type="button" className={dest === "drive" ? "on" : ""} onClick={() => driveEnabled ? setDest("drive") : toast("Conéctate a Google Drive en Ajustes", "err")} disabled={!driveEnabled}>
+                    <Ic.cloud s={15}/> Google Drive
+                  </button>
+                  <button type="button" className={dest === "dropbox" ? "on" : ""} onClick={() => dropboxEnabled ? setDest("dropbox") : toast("Conéctate a Dropbox en Ajustes", "err")} disabled={!dropboxEnabled}>
+                    <Ic.cloud s={15}/> Dropbox
+                  </button>
+                  <button type="button" className={dest === "link" ? "on" : ""} onClick={() => setDest("link")}>
+                    <Ic.open s={15}/> TeraBox / enlace
+                  </button>
                 </div>
-              )}
+                {dest === "link" && (
+                  <p className="muted" style={{fontSize:12, marginTop:8, lineHeight:1.5}}>
+                    Sube el libro a TeraBox desde su app o web, copia el enlace para compartir y pégalo arriba. La app lo guarda y lo abre cuando lo necesites.
+                  </p>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -1421,7 +1455,14 @@ function BookDetail({ book, onClose, onEdit, onDelete, onRead, toast }) {
                 ))}
               </div>
 
-              {book.file && (
+              {book.file && book.file.storage === "link" ? (
+                <div style={{display:"flex", gap:9, flexWrap:"wrap", marginTop:4}}>
+                  <button className="btn btn-primary btn-sm" onClick={() => window.open(book.file.url, "_blank", "noopener")}>
+                    <Ic.open s={16}/> Abrir enlace{fmt ? " (" + fmt + ")" : ""}
+                  </button>
+                  <span className="chip" style={{alignSelf:"center"}}>TeraBox / enlace</span>
+                </div>
+              ) : book.file && (
                 <div style={{display:"flex", gap:9, flexWrap:"wrap", marginTop:4}}>
                   {fmt === "EPUB" ? (
                     <button className="btn btn-primary btn-sm" onClick={() => onRead(book)}>
@@ -1503,6 +1544,7 @@ function Settings({ clientId, setClientId, driveConnected, connectDrive, disconn
               <button className={defaultStorage === "local" ? "on" : ""} onClick={() => setDefaultStorage("local")}><Ic.file s={15}/> Este dispositivo</button>
               <button className={defaultStorage === "drive" ? "on" : ""} onClick={() => driveConnected ? setDefaultStorage("drive") : null} disabled={!driveConnected}><Ic.cloud s={15}/> Google Drive</button>
               <button className={defaultStorage === "dropbox" ? "on" : ""} onClick={() => dropboxConnected ? setDefaultStorage("dropbox") : null} disabled={!dropboxConnected}><Ic.cloud s={15}/> Dropbox</button>
+              <button className={defaultStorage === "link" ? "on" : ""} onClick={() => setDefaultStorage("link")}><Ic.open s={15}/> TeraBox / enlace</button>
             </div>
           </div>
 
