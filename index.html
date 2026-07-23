@@ -226,27 +226,28 @@
   /* Modal */
   .backdrop{
     position:fixed;inset:0;z-index:60;background:rgba(8,6,4,.72);backdrop-filter:blur(6px);
-    display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;overflow-y:auto;
+    display:flex;align-items:center;justify-content:center;padding:20px 16px;overflow-y:auto;
     animation:fade .2s ease;
   }
   @keyframes fade{from{opacity:0;}to{opacity:1;}}
   .modal{
     width:100%;max-width:640px;background:var(--surface);border:1px solid var(--line-strong);
-    border-radius:20px;box-shadow:var(--shadow);margin:auto 0;animation:pop .22s cubic-bezier(.2,.8,.3,1);
-    overflow:hidden;
+    border-radius:20px;box-shadow:var(--shadow);animation:pop .22s cubic-bezier(.2,.8,.3,1);
+    display:flex;flex-direction:column;overflow:hidden;
+    max-height:calc(100vh - 40px);max-height:calc(100dvh - 40px);
   }
   .modal-lg{max-width:760px;}
   @keyframes pop{from{opacity:0;transform:translateY(14px) scale(.98);}to{opacity:1;transform:none;}}
   .modal-head{
-    display:flex;align-items:center;justify-content:space-between;gap:12px;
-    padding:18px 22px;border-bottom:1px solid var(--line);position:sticky;top:0;
+    display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none;
+    padding:18px 22px;border-bottom:1px solid var(--line);
     background:var(--surface);z-index:2;
   }
   .modal-head h2{font-family:var(--serif);font-size:20px;font-weight:600;margin:0;}
-  .modal-body{padding:22px;}
+  .modal-body{padding:22px;overflow-y:auto;flex:1 1 auto;-webkit-overflow-scrolling:touch;}
   .modal-foot{
-    display:flex;gap:10px;justify-content:flex-end;padding:16px 22px;
-    border-top:1px solid var(--line);flex-wrap:wrap;
+    display:flex;gap:10px;justify-content:flex-end;padding:16px 22px;flex:none;
+    border-top:1px solid var(--line);flex-wrap:wrap;background:var(--surface);
   }
 
   /* Formulario */
@@ -381,6 +382,9 @@
   .badge-unread{background:rgba(127,176,224,.14);border:1px solid rgba(127,176,224,.35);color:#8fbce8;}
   .cover-status{position:absolute;top:8px;left:8px;z-index:3;font-size:10px;font-weight:700;letter-spacing:.4px;padding:3px 7px;border-radius:6px;backdrop-filter:blur(4px);}
   .cover-status.unread{background:rgba(15,13,10,.82);color:#8fbce8;border:1px solid rgba(127,176,224,.4);}
+  .cover-status.reading{background:rgba(15,13,10,.85);color:var(--accent-soft);border:1px solid rgba(200,150,62,.5);}
+  .card-progress{position:absolute;left:0;right:0;bottom:0;height:4px;background:rgba(0,0,0,.45);z-index:3;}
+  .card-progress>div{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent-soft));}
   .muted{color:var(--ink-faint);}
   .spin{animation:spin 1s linear infinite;}
   @keyframes spin{to{transform:rotate(360deg);}}
@@ -447,6 +451,9 @@ const Ic = {
   chevL:(p)=><svg width={p.s||26} height={p.s||26} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6"/></svg>,
   chevR:(p)=><svg width={p.s||26} height={p.s||26} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18l6-6-6-6"/></svg>,
   contrast:(p)=><svg width={p.s||20} height={p.s||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/></svg>,
+  chart:(p)=><svg width={p.s||20} height={p.s||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6" rx="1" fill="currentColor" stroke="none"/><rect x="12" y="8" width="3" height="10" rx="1" fill="currentColor" stroke="none"/><rect x="17" y="4" width="3" height="14" rx="1" fill="currentColor" stroke="none"/></svg>,
+  move:(p)=><svg width={p.s||18} height={p.s||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/></svg>,
+  send:(p)=><svg width={p.s||18} height={p.s||18} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>,
 };
 
 /* ============================================================
@@ -499,17 +506,20 @@ const DB = (() => {
    GOOGLE DRIVE — subir/descargar archivos (scope drive.file)
    ============================================================ */
 const Drive = (() => {
-  let tokenClient = null, accessToken = null, folderId = null, clientId = "";
+  let tokenClient = null, accessToken = null, tokenExpiry = 0, folderId = null, clientId = "";
 
   let pending = null;
 
   function ready() { return typeof google !== "undefined" && google.accounts && google.accounts.oauth2; }
+  function tokenValid() { return !!accessToken && Date.now() < tokenExpiry - 60000; }
 
   function mapErr(e) {
     const t = (e && e.type) || (e && e.error) || "";
     if (t === "popup_closed") return "Se cerró la ventana de Google antes de otorgar el permiso. Reintenta y elige tu cuenta sin cerrar el popup.";
     if (t === "popup_failed_to_open") return "El navegador bloqueó la ventana emergente. Permite las ventanas emergentes para este sitio y vuelve a intentar.";
     if (t === "access_denied") return "Google denegó el acceso. Agrega tu cuenta como usuario de prueba en la consola de Google.";
+    if (t === "interaction_required" || t === "login_required" || t === "consent_required")
+      return "Tu sesión de Google caducó. Pulsa «Conectar Google Drive» en Ajustes para reconectar.";
     return "No se pudo autorizar en Google (" + (t || "motivo desconocido") + "). Activa las cookies de terceros para accounts.google.com o prueba en Chrome de escritorio.";
   }
 
@@ -522,6 +532,7 @@ const Drive = (() => {
       callback: (resp) => {
         if (resp && resp.access_token) {
           accessToken = resp.access_token;
+          tokenExpiry = Date.now() + ((resp.expires_in ? resp.expires_in : 3600) * 1000);
           if (pending) { pending.resolve(accessToken); pending = null; }
         } else if (pending) {
           pending.reject(new Error(mapErr(resp))); pending = null;
@@ -534,17 +545,43 @@ const Drive = (() => {
     return true;
   }
 
-  // Reutiliza el token de la sesión: así solo se abre UNA ventana de permiso por sesión.
-  // silent=true intenta obtenerlo sin popup (si ya diste permiso antes).
-  function getToken(silent) {
+  function requestToken(interactive) {
     return new Promise((res, rej) => {
-      if (accessToken) return res(accessToken);
       if (!tokenClient) return rej(new Error("Google Drive no está configurado. Agrega tu Client ID en Ajustes."));
       pending = { resolve: res, reject: rej };
-      try { tokenClient.requestAccessToken({ prompt: silent ? "" : "consent" }); }
+      try { tokenClient.requestAccessToken({ prompt: interactive ? "consent" : "" }); }
       catch (e) { pending = null; rej(e); }
     });
   }
+
+  // Devuelve un token válido. Si caducó o falta, lo refresca EN SILENCIO (sin popup)
+  // cuando ya diste permiso antes. Solo connect() abre la ventana de Google.
+  async function getToken() {
+    if (tokenValid()) return accessToken;
+    return requestToken(false);
+  }
+
+  // Conexión interactiva (botón «Conectar Google Drive» en Ajustes)
+  async function connect() {
+    return requestToken(true);
+  }
+
+  // fetch autenticado: añade el token y, si Google responde 401 (token vencido),
+  // lo refresca una vez en silencio y reintenta. Esto evita las desconexiones.
+  async function authFetch(url, opts, _retried) {
+    opts = opts || {};
+    let token = await getToken();
+    const headers = Object.assign({}, opts.headers || {}, { Authorization: "Bearer " + token });
+    let r = await fetch(url, Object.assign({}, opts, { headers }));
+    if (r.status === 401 && !_retried) {
+      accessToken = null; tokenExpiry = 0;
+      await getToken();
+      return authFetch(url, opts, true);
+    }
+    return r;
+  }
+
+  function getToken_legacy(silent) { return getToken(); }
 
   // Traduce el error real que devuelve la API de Drive a un mensaje claro
   async function apiErr(r) {
@@ -564,13 +601,13 @@ const Drive = (() => {
     if (folderId) return folderId;
     const token = await getToken();
     const q = encodeURIComponent(`name='${DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
-    const r = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`, {
+    const r = await authFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`, {
       headers: { Authorization: "Bearer " + token },
     });
     if (!r.ok) throw new Error(await apiErr(r));
     const d = await r.json();
     if (d.files && d.files.length) { folderId = d.files[0].id; return folderId; }
-    const r2 = await fetch("https://www.googleapis.com/drive/v3/files?fields=id", {
+    const r2 = await authFetch("https://www.googleapis.com/drive/v3/files?fields=id", {
       method: "POST",
       headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
       body: JSON.stringify({ name: DRIVE_FOLDER_NAME, mimeType: "application/vnd.google-apps.folder" }),
@@ -589,7 +626,7 @@ const Drive = (() => {
     const head = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: ${mime || "application/octet-stream"}\r\n\r\n`;
     const tail = `\r\n--${boundary}--`;
     const body = new Blob([head, fileBlob, tail], { type: "multipart/related; boundary=" + boundary });
-    const r = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink,size", {
+    const r = await authFetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink,size", {
       method: "POST", headers: { Authorization: "Bearer " + token }, body,
     });
     if (!r.ok) throw new Error(await apiErr(r));
@@ -598,7 +635,7 @@ const Drive = (() => {
 
   async function download(fileId) {
     const token = await getToken();
-    const r = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+    const r = await authFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
       headers: { Authorization: "Bearer " + token },
     });
     if (!r.ok) throw new Error(await apiErr(r));
@@ -608,7 +645,7 @@ const Drive = (() => {
   async function remove(fileId) {
     try {
       const token = await getToken();
-      await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+      await authFetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
         method: "DELETE", headers: { Authorization: "Bearer " + token },
       });
     } catch (e) { /* silencioso: el archivo puede ya no existir */ }
@@ -623,7 +660,7 @@ const Drive = (() => {
     const token = await getToken();
     const parent = await ensureFolder();
     const q = encodeURIComponent(`name='${DATA_NAME}' and '${parent}' in parents and trashed=false`);
-    const r = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,modifiedTime)&orderBy=modifiedTime desc`, {
+    const r = await authFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,modifiedTime)&orderBy=modifiedTime desc`, {
       headers: { Authorization: "Bearer " + token },
     });
     if (!r.ok) throw new Error(await apiErr(r));
@@ -636,7 +673,7 @@ const Drive = (() => {
     const id = await findLibraryFile();
     if (!id) return null;
     const token = await getToken();
-    const r = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`, {
+    const r = await authFetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`, {
       headers: { Authorization: "Bearer " + token },
     });
     if (!r.ok) throw new Error(await apiErr(r));
@@ -650,7 +687,7 @@ const Drive = (() => {
     const id = await findLibraryFile();
     if (id) {
       // Actualiza el contenido del archivo existente
-      const r = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${id}?uploadType=media`, {
+      const r = await authFetch(`https://www.googleapis.com/upload/drive/v3/files/${id}?uploadType=media`, {
         method: "PATCH", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: json,
       });
       if (!r.ok) throw new Error(await apiErr(r));
@@ -662,7 +699,7 @@ const Drive = (() => {
     const head = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n`;
     const tail = `\r\n--${boundary}--`;
     const body = new Blob([head, json, tail], { type: "multipart/related; boundary=" + boundary });
-    const r = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", {
+    const r = await authFetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", {
       method: "POST", headers: { Authorization: "Bearer " + token }, body,
     });
     if (!r.ok) throw new Error(await apiErr(r));
@@ -672,10 +709,10 @@ const Drive = (() => {
   }
 
   return {
-    init, getToken, upload, download, remove, ensureFolder,
+    init, getToken, connect, authFetch, upload, download, remove, ensureFolder,
     loadLibrary, saveLibrary,
-    ready, isConfigured: () => !!clientId, hasToken: () => !!accessToken,
-    clearToken: () => { accessToken = null; folderId = null; libFileId = null; },
+    ready, isConfigured: () => !!clientId, hasToken: () => tokenValid(),
+    clearToken: () => { accessToken = null; tokenExpiry = 0; folderId = null; libFileId = null; },
   };
 })();
 
@@ -755,19 +792,124 @@ const Dropbox = (() => {
   return { setKey, isConfigured, hasToken, clear, connect, captureFromHash, upload, download, remove };
 })();
 
+/* ============================================================
+   TELEGRAM — almacenamiento en un canal, vía Worker de Cloudflare
+   Necesita: URL del Worker (proxy CORS), token del bot y chat_id
+   del canal (el bot debe ser administrador del canal).
+   ============================================================ */
+const Telegram = (() => {
+  let worker = "", token = "", chatId = "";
+
+  function config(w, t, c) {
+    worker = (w || "").trim().replace(/\/+$/, "");
+    token = (t || "").trim();
+    chatId = (c || "").trim();
+  }
+  function isConfigured() { return !!(worker && token && chatId); }
+  function base() { return worker + "/bot" + token; }
+
+  async function apiErr(r) {
+    let j = null; try { j = await r.json(); } catch (e) {}
+    if (j && j.description) return "Telegram: " + j.description;
+    return "Telegram respondió " + r.status + ". Revisa la URL del Worker y el token del bot.";
+  }
+
+  async function upload(blob, name) {
+    if (!isConfigured()) throw new Error("Configura Telegram en Ajustes (URL del Worker, token del bot y canal).");
+    if (blob.size > 50 * 1024 * 1024) throw new Error("Telegram (vía bot) solo admite archivos de hasta 50 MB.");
+    const fd = new FormData();
+    fd.append("chat_id", chatId);
+    fd.append("document", blob, name || "libro.epub");
+    const r = await fetch(base() + "/sendDocument", { method: "POST", body: fd });
+    if (!r.ok) throw new Error(await apiErr(r));
+    const d = await r.json();
+    if (!d.ok) throw new Error("Telegram: " + (d.description || "no se pudo subir el archivo."));
+    const doc = d.result && d.result.document;
+    if (!doc || !doc.file_id) throw new Error("Telegram no devolvió el identificador del archivo.");
+    return { fileId: doc.file_id, messageId: d.result.message_id, chatId };
+  }
+
+  async function download(fileId) {
+    if (!isConfigured()) throw new Error("Configura Telegram en Ajustes.");
+    const r = await fetch(base() + "/getFile?file_id=" + encodeURIComponent(fileId));
+    if (!r.ok) throw new Error(await apiErr(r));
+    const d = await r.json();
+    if (!d.ok || !d.result || !d.result.file_path) throw new Error("Telegram: no se encontró el archivo (¿se borró del canal?).");
+    const fr = await fetch(worker + "/file/bot" + token + "/" + d.result.file_path);
+    if (!fr.ok) throw new Error("Telegram: no se pudo descargar el archivo.");
+    return fr.blob();
+  }
+
+  async function remove(messageId) {
+    if (!isConfigured() || !messageId) return;
+    try { await fetch(base() + "/deleteMessage?chat_id=" + encodeURIComponent(chatId) + "&message_id=" + messageId); } catch (e) {}
+  }
+
+  // Prueba: valida el bot y el acceso al canal
+  async function test() {
+    if (!isConfigured()) throw new Error("Faltan datos: URL del Worker, token del bot y canal.");
+    let r;
+    try { r = await fetch(base() + "/getMe"); }
+    catch (e) { throw new Error("No se pudo contactar el Worker. Revisa que la URL sea correcta y esté publicada."); }
+    if (!r.ok) throw new Error(await apiErr(r));
+    const d = await r.json();
+    if (!d.ok) throw new Error("El token del bot no es válido.");
+    const r2 = await fetch(base() + "/getChat?chat_id=" + encodeURIComponent(chatId));
+    const d2 = await r2.json().catch(() => ({}));
+    if (!r2.ok || !d2.ok) throw new Error("No se pudo acceder al canal. Verifica el chat_id y añade el bot como administrador del canal.");
+    return { bot: d.result && d.result.username, chat: d2.result && (d2.result.title || d2.result.username || chatId) };
+  }
+
+  return { config, isConfigured, upload, download, remove, test };
+})();
+
+/* Ubicaciones de un libro (soporta varias). Compatible con libros antiguos de una sola. */
+function getFiles(book) {
+  if (book.files && book.files.length) return book.files;
+  return book.file ? [book.file] : [];
+}
+
+/* Elimina UNA ubicación (borra el archivo del servicio correspondiente) */
+async function removeLocation(bookId, f) {
+  if (!f) return;
+  try {
+    if (f.storage === "local") await DB.deleteFile(bookId);
+    else if (f.storage === "drive" && f.driveFileId) await Drive.remove(f.driveFileId);
+    else if (f.storage === "dropbox" && (f.dropboxPath || f.dropboxId)) await Dropbox.remove(f.dropboxPath || f.dropboxId);
+    else if (f.storage === "telegram" && f.messageId) await Telegram.remove(f.messageId);
+    // link: no hay nada que borrar en el servicio externo
+  } catch (e) { /* silencioso: puede que ya no exista */ }
+}
+
 /* Descarga el blob de un libro sea cual sea su ubicación */
-async function getBookBlob(book) {
-  const f = book.file;
-  if (!f) throw new Error("Este libro no tiene archivo.");
-  if (f.storage === "link") throw new Error("Este libro está guardado como enlace (TeraBox). Usa «Abrir enlace».");
+async function fetchFromLocation(book, f) {
+  if (f.storage === "link") throw new Error("Ubicación de solo enlace.");
   if (f.storage === "drive") return Drive.download(f.driveFileId);
   if (f.storage === "dropbox") return Dropbox.download(f.dropboxPath || f.dropboxId);
+  if (f.storage === "telegram") return Telegram.download(f.fileId);
   const rec = await DB.getFile(book.id);
-  if (!rec) throw new Error("El archivo no está en este dispositivo. Ábrelo donde lo guardaste o súbelo a Drive/Dropbox.");
+  if (!rec) throw new Error("El archivo no está en este dispositivo.");
   return rec.blob;
 }
 
-const STORAGE_LABEL = { local: "En este dispositivo", drive: "Google Drive", dropbox: "Dropbox", link: "TeraBox / enlace" };
+async function getBookBlob(book, preferStorage) {
+  const files = getFiles(book);
+  if (!files.length) throw new Error("Este libro no tiene archivo.");
+  // Orden de preferencia: la ubicación pedida, luego local, luego nube (link al final: no descargable)
+  const order = files.slice().sort((a, bb) => {
+    const rank = (x) => x.storage === preferStorage ? 0 : x.storage === "local" ? 1 : x.storage === "link" ? 9 : 2;
+    return rank(a) - rank(bb);
+  });
+  let lastErr = null;
+  for (const f of order) {
+    if (f.storage === "link") continue;
+    try { return await fetchFromLocation(book, f); }
+    catch (e) { lastErr = e; }
+  }
+  throw new Error(lastErr ? lastErr.message : "Este libro solo está guardado como enlace. Usa «Abrir enlace».");
+}
+
+const STORAGE_LABEL = { local: "En este dispositivo", drive: "Google Drive", dropbox: "Dropbox", telegram: "Telegram", link: "Enlace externo" };
 
 /* ============================================================
    UTILIDADES
@@ -1030,27 +1172,31 @@ function RateInput({ value, onChange }) {
    ============================================================ */
 function BookCard({ book, onOpen }) {
   const fmt = book.file ? fmtOf(book.file) : "";
-  const store = book.file && book.file.storage;
+  const stores = getFiles(book).map(f => f.storage);
   const unread = book.status === "unread";
+  const reading = book.status === "reading";
   return (
     <div className="card" onClick={() => onOpen(book)}>
       <div className="cover">
         {unread && <span className="cover-status unread">POR LEER</span>}
+        {reading && <span className="cover-status reading">LEYENDO {book.progress || 0}%</span>}
         <div className="cover-badges">
           {fmt && <span className="fmt-badge">{fmt}</span>}
-          {store === "drive" && <span className="fmt-badge drive-badge">Drive</span>}
-          {store === "dropbox" && <span className="fmt-badge drive-badge">Dropbox</span>}
-          {store === "link" && <span className="fmt-badge drive-badge">TeraBox</span>}
+          {stores.includes("drive") && <span className="fmt-badge drive-badge">Drive</span>}
+          {stores.includes("dropbox") && <span className="fmt-badge drive-badge">Dropbox</span>}
+          {stores.includes("telegram") && <span className="fmt-badge drive-badge">Telegram</span>}
+          {stores.includes("link") && <span className="fmt-badge drive-badge">Enlace</span>}
         </div>
         {book.cover
           ? <img src={book.cover} alt={book.title} loading="lazy" />
           : <div className="cover-empty"><span className="ti">{book.title}</span><span className="au">{book.author}</span></div>}
+        {reading && <div className="card-progress"><div style={{width:(book.progress||0)+"%"}}></div></div>}
       </div>
       <div className="card-body">
         <div className="card-title">{book.title}</div>
         <div className="card-author">{book.author || "—"}</div>
         <div className="card-meta">
-          {book.rating ? <Stars value={book.rating} size={13} /> : <span className="muted" style={{fontSize:11}}>{unread ? "Por leer" : "Sin nota"}</span>}
+          {book.rating ? <Stars value={book.rating} size={13} /> : <span className="muted" style={{fontSize:11}}>{unread ? "Por leer" : (reading ? "Leyendo" : "Sin nota")}</span>}
           {book.genre && <span className="card-genre">{book.genre}</span>}
         </div>
       </div>
@@ -1060,7 +1206,7 @@ function BookCard({ book, onOpen }) {
 
 function BookRow({ book, onOpen }) {
   const fmt = book.file ? fmtOf(book.file) : "";
-  const store = book.file && book.file.storage;
+  const stores = getFiles(book).map(f => f.storage);
   const unread = book.status === "unread";
   return (
     <div className="row" onClick={() => onOpen(book)}>
@@ -1077,9 +1223,10 @@ function BookRow({ book, onOpen }) {
           {unread && <span className="chip badge-unread">Por leer</span>}
           {book.genre && <span className="chip">{book.genre}</span>}
           {fmt && <span className="chip chip-accent">{fmt}</span>}
-          {store === "drive" && <span className="chip" style={{color:"#7fb0e0"}}>Drive</span>}
-          {store === "dropbox" && <span className="chip" style={{color:"#7fb0e0"}}>Dropbox</span>}
-          {store === "link" && <span className="chip" style={{color:"#7fb0e0"}}>TeraBox</span>}
+          {stores.includes("drive") && <span className="chip" style={{color:"#7fb0e0"}}>Drive</span>}
+          {stores.includes("dropbox") && <span className="chip" style={{color:"#7fb0e0"}}>Dropbox</span>}
+          {stores.includes("telegram") && <span className="chip" style={{color:"#7fb0e0"}}>Telegram</span>}
+          {stores.includes("link") && <span className="chip" style={{color:"#7fb0e0"}}>Enlace</span>}
         </div>
       </div>
     </div>
@@ -1089,7 +1236,7 @@ function BookRow({ book, onOpen }) {
 /* ============================================================
    FORMULARIO agregar/editar
    ============================================================ */
-function BookForm({ initial, driveEnabled, dropboxEnabled, defaultStorage, aiEnabled, onSave, onClose, toast }) {
+function BookForm({ initial, driveEnabled, dropboxEnabled, telegramEnabled, defaultStorage, aiEnabled, onSave, onClose, toast }) {
   const [b, setB] = useState(() => initial || {
     id: uid(), title: "", author: "", genre: "", year: "", pages: "",
     readDate: new Date().toISOString().slice(0,10), rating: 0, review: "", synopsis: "",
@@ -1097,11 +1244,15 @@ function BookForm({ initial, driveEnabled, dropboxEnabled, defaultStorage, aiEna
   });
   const [newFile, setNewFile] = useState(null);       // File pendiente de guardar
   const [removeFile, setRemoveFile] = useState(false);
-  const [dest, setDest] = useState(() => {
-    if (initial && initial.file) return initial.file.storage;   // conserva el destino actual
-    return defaultStorage || "local";
+  const [dests, setDests] = useState(() => {
+    const existing = getFiles(initial || {}).map(f => f.storage);
+    if (existing.length) return existing;
+    return [defaultStorage || "local"];
   });
-  const [linkUrl, setLinkUrl] = useState(() => (initial && initial.file && initial.file.storage === "link" && initial.file.url) || "");
+  const [linkUrl, setLinkUrl] = useState(() => {
+    const l = getFiles(initial || {}).find(f => f.storage === "link");
+    return (l && l.url) || "";
+  });
   const [saving, setSaving] = useState(false);
   const [progress, setProgress] = useState("");
   const [reading, setReading] = useState(false);       // leyendo metadatos del archivo
@@ -1109,6 +1260,7 @@ function BookForm({ initial, driveEnabled, dropboxEnabled, defaultStorage, aiEna
   const sampleRef = useRef("");                        // muestra de texto para la IA
   const coverRef = useRef(), fileRef = useRef();
   const set = (k, v) => setB(p => ({ ...p, [k]: v }));
+  const toggleDest = (s) => setDests(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]);
 
   async function pickCover(e) {
     const f = e.target.files[0]; if (!f) return;
@@ -1163,53 +1315,81 @@ function BookForm({ initial, driveEnabled, dropboxEnabled, defaultStorage, aiEna
 
   async function save() {
     if (!b.title.trim()) { toast("El título es obligatorio", "err"); return; }
-    if (dest === "link" && !linkUrl.trim() && !(b.file && b.file.storage === "link")) {
-      toast("Pega el enlace de TeraBox (o del servicio que uses)", "err"); return;
+    const sel = dests.slice();
+    if (!sel.length) { toast("Elige al menos un lugar donde guardar el libro", "err"); return; }
+    const oldFiles = getFiles(b);
+    const hasExistingLink = oldFiles.some(f => f.storage === "link");
+    if (sel.includes("link") && !linkUrl.trim() && !hasExistingLink) {
+      toast("Pega el enlace (TeraBox, Telegram…) o quítalo de los destinos", "err"); return;
     }
     setSaving(true);
     try {
-      let file = removeFile ? null : b.file;
+      // ¿Hay que reconstruir las ubicaciones?
+      const oldStores = oldFiles.map(f => f.storage).sort().join(",");
+      const newStores = sel.slice().sort().join(",");
+      const oldLink = (oldFiles.find(f => f.storage === "link") || {}).url || "";
+      const linkChanged = sel.includes("link") && linkUrl.trim() && linkUrl.trim() !== oldLink;
+      const rebuild = !!newFile || removeFile || !initial || oldStores !== newStores || linkChanged;
 
-      // ¿Vamos a fijar un archivo/enlace nuevo?
-      const settingLink = dest === "link" && linkUrl.trim();
-      const buildingNew = !!newFile || !!settingLink;
+      let files = oldFiles;
 
-      // Limpieza del anterior si se reemplaza o elimina
-      if ((buildingNew || removeFile) && b.file) {
-        if (b.file.storage === "local") await DB.deleteFile(b.id);
-        else if (b.file.storage === "drive" && b.file.driveFileId) await Drive.remove(b.file.driveFileId);
-        else if (b.file.storage === "dropbox" && (b.file.dropboxPath || b.file.dropboxId)) await Dropbox.remove(b.file.dropboxPath || b.file.dropboxId);
-        // link: no hay nada que borrar en el servicio externo
-      }
-
-      if (settingLink) {
-        const url = linkUrl.trim();
-        const ft = /\.epub(\?|#|$)/i.test(url) ? "application/epub+zip" : (/\.pdf(\?|#|$)/i.test(url) ? "application/pdf" : "");
-        file = {
-          storage: "link", url,
-          fileName: (newFile && newFile.name) || (b.file && b.file.fileName) || "Enlace externo",
-          fileType: (newFile && newFile.type) || ft, fileSize: 0,
-        };
-      } else if (newFile) {
-        const common = { fileName: newFile.name, fileType: newFile.type, fileSize: newFile.size };
-        if (dest === "drive" && !driveEnabled) throw new Error("Conéctate a Google Drive o elige otro destino.");
-        if (dest === "dropbox" && !dropboxEnabled) throw new Error("Conéctate a Dropbox o elige otro destino.");
-        if (dest === "drive") {
-          setProgress("Subiendo a Google Drive…");
-          const up = await Drive.upload(newFile, newFile.name, newFile.type);
-          file = { storage: "drive", driveFileId: up.id, driveLink: up.webViewLink, ...common };
-        } else if (dest === "dropbox") {
-          setProgress("Subiendo a Dropbox…");
-          const up = await Dropbox.upload(newFile, newFile.name);
-          file = { storage: "dropbox", dropboxId: up.dropboxId, dropboxPath: up.dropboxPath, ...common };
-        } else {
-          setProgress("Guardando archivo…");
-          await DB.putFile(b.id, newFile);
-          file = { storage: "local", ...common };
+      if (removeFile) {
+        // Quitar el archivo por completo
+        for (const f of oldFiles) await removeLocation(b.id, f);
+        files = [];
+      } else if (rebuild) {
+        const needBlobStores = sel.filter(s => s !== "link");
+        // Consigue el blob si algún destino real lo necesita
+        let blob = newFile || null;
+        if (needBlobStores.length && !blob) {
+          const src = oldFiles.find(f => f.storage !== "link");
+          if (src) { setProgress("Obteniendo el archivo…"); blob = await getBookBlob(b, src.storage); }
         }
+        if (needBlobStores.length && !blob) {
+          throw new Error("Adjunta el archivo (EPUB o PDF) para poder guardarlo en esos destinos.");
+        }
+        // Nombre/tipo/tamaño de referencia
+        const name = (newFile && newFile.name) || (oldFiles[0] && oldFiles[0].fileName) || (b.title.trim() + ".epub");
+        const type = (newFile && newFile.type) || (oldFiles[0] && oldFiles[0].fileType) || "application/octet-stream";
+        const size = (newFile && newFile.size) || (blob && blob.size) || 0;
+        const common = { fileName: name, fileType: type, fileSize: size };
+
+        // Elimina las ubicaciones anteriores (se vuelven a subir limpias)
+        for (const f of oldFiles) await removeLocation(b.id, f);
+
+        const built = [];
+        for (const s of sel) {
+          if (s === "link") {
+            const url = (linkUrl.trim() || oldLink);
+            if (url) {
+              const ft = /\.epub(\?|#|$)/i.test(url) ? "application/epub+zip" : (/\.pdf(\?|#|$)/i.test(url) ? "application/pdf" : "");
+              built.push({ storage: "link", url, fileName: name, fileType: (type !== "application/octet-stream" ? type : ft), fileSize: 0 });
+            }
+          } else if (s === "drive") {
+            if (!driveEnabled) throw new Error("Conéctate a Google Drive o quítalo de los destinos.");
+            setProgress("Subiendo a Google Drive…");
+            const up = await Drive.upload(blob, name, type);
+            built.push({ storage: "drive", driveFileId: up.id, driveLink: up.webViewLink, ...common });
+          } else if (s === "dropbox") {
+            if (!dropboxEnabled) throw new Error("Conéctate a Dropbox o quítalo de los destinos.");
+            setProgress("Subiendo a Dropbox…");
+            const up = await Dropbox.upload(blob, name);
+            built.push({ storage: "dropbox", dropboxId: up.dropboxId, dropboxPath: up.dropboxPath, ...common });
+          } else if (s === "telegram") {
+            if (!telegramEnabled) throw new Error("Configura Telegram en Ajustes o quítalo de los destinos.");
+            setProgress("Subiendo a Telegram…");
+            const up = await Telegram.upload(blob, name);
+            built.push({ storage: "telegram", fileId: up.fileId, messageId: up.messageId, chatId: up.chatId, ...common });
+          } else {
+            setProgress("Guardando en este dispositivo…");
+            await DB.putFile(b.id, blob);
+            built.push({ storage: "local", ...common });
+          }
+        }
+        files = built;
       }
 
-      const rec = { ...b, title: b.title.trim(), author: b.author.trim(), file, dateModified: Date.now() };
+      const rec = { ...b, title: b.title.trim(), author: b.author.trim(), files, file: files[0] || null, dateModified: Date.now() };
       await DB.putBook(rec);
       onSave(rec);
       toast(initial ? "Libro actualizado" : "Libro agregado a tu biblioteca", "ok");
@@ -1254,12 +1434,25 @@ function BookForm({ initial, driveEnabled, dropboxEnabled, defaultStorage, aiEna
             <div className="full">
               <label className="lbl">Estado</label>
               <div className="seg">
-                <button type="button" className={b.status !== "unread" ? "on" : ""} onClick={() => set("status", "read")}>
-                  <Ic.check s={16}/> Leído
-                </button>
                 <button type="button" className={b.status === "unread" ? "on" : ""} onClick={() => set("status", "unread")}>
                   <Ic.bookOpen s={16}/> Por leer
                 </button>
+                <button type="button" className={b.status === "reading" ? "on" : ""} onClick={() => set("status", "reading")}>
+                  <Ic.book s={16}/> Leyendo
+                </button>
+                <button type="button" className={(b.status === "read" || !b.status) ? "on" : ""} onClick={() => set("status", "read")}>
+                  <Ic.check s={16}/> Leído
+                </button>
+              </div>
+            </div>
+            <div className="full">
+              <label className="lbl">Progreso de lectura</label>
+              <div style={{display:"flex", gap:10, alignItems:"center", flexWrap:"wrap"}}>
+                <input className="inp" style={{maxWidth:110}} value={b.progress != null ? b.progress : ""} inputMode="numeric"
+                  onChange={e => { const v = Math.max(0, Math.min(100, parseInt(e.target.value.replace(/\D/g,"")||"0",10))); setB(p => ({ ...p, progress: v, status: v >= 100 ? "read" : (v > 0 ? "reading" : p.status) })); }}
+                  placeholder="0" />
+                <span className="muted">% leído</span>
+                <div className="reader-progress" style={{flex:1, minWidth:120}}><div style={{width:(b.progress||0)+"%"}}></div></div>
               </div>
             </div>
             <div className="full">
@@ -1315,64 +1508,62 @@ function BookForm({ initial, driveEnabled, dropboxEnabled, defaultStorage, aiEna
             </div>
 
             <div className="full">
-              <label className="lbl">Archivo del libro (EPUB o PDF)</label>
+              <label className="lbl">¿Dónde guardar este libro?</label>
+              <p className="muted" style={{fontSize:12, margin:"0 0 9px", lineHeight:1.5}}>Puedes marcar más de una opción y el libro se guardará (o copiará) en todas.</p>
+              <div className="seg seg-multi" style={{marginBottom:12, flexWrap:"wrap"}}>
+                <button type="button" className={dests.includes("local") ? "on" : ""} onClick={() => toggleDest("local")}>
+                  {dests.includes("local") ? <Ic.check s={14}/> : <Ic.file s={15}/>} Este dispositivo
+                </button>
+                <button type="button" className={dests.includes("drive") ? "on" : ""} onClick={() => driveEnabled ? toggleDest("drive") : toast("Conéctate a Google Drive en Ajustes", "err")} disabled={!driveEnabled}>
+                  {dests.includes("drive") ? <Ic.check s={14}/> : <Ic.cloud s={15}/>} Google Drive
+                </button>
+                <button type="button" className={dests.includes("dropbox") ? "on" : ""} onClick={() => dropboxEnabled ? toggleDest("dropbox") : toast("Conéctate a Dropbox en Ajustes", "err")} disabled={!dropboxEnabled}>
+                  {dests.includes("dropbox") ? <Ic.check s={14}/> : <Ic.cloud s={15}/>} Dropbox
+                </button>
+                <button type="button" className={dests.includes("telegram") ? "on" : ""} onClick={() => telegramEnabled ? toggleDest("telegram") : toast("Configura Telegram en Ajustes", "err")} disabled={!telegramEnabled}>
+                  {dests.includes("telegram") ? <Ic.check s={14}/> : <Ic.send s={15}/>} Telegram
+                </button>
+                <button type="button" className={dests.includes("link") ? "on" : ""} onClick={() => toggleDest("link")}>
+                  {dests.includes("link") ? <Ic.check s={14}/> : <Ic.open s={15}/>} Enlace (TeraBox…)
+                </button>
+              </div>
+
               <input ref={fileRef} type="file" accept=".epub,.pdf,application/pdf,application/epub+zip" className="hidden" onChange={pickFile} />
 
-              {dest === "link" ? (
-                <>
-                  <input className="inp" value={linkUrl} onChange={e => setLinkUrl(e.target.value)} placeholder="Pega aquí el enlace de TeraBox (o de otro servicio)" style={{marginBottom:10}} />
-                  {curFile && !newFile && b.file.storage !== "link" && (
-                    <p className="muted" style={{fontSize:12, marginBottom:10}}>Al guardar como enlace se quitará el archivo que tenías en {STORAGE_LABEL[b.file.storage].toLowerCase()}.</p>
-                  )}
-                  <div className="dropzone" onClick={() => fileRef.current.click()} style={{cursor:"pointer"}}>
-                    <div className="dz-ic">{reading ? <Ic.loader /> : <Ic.upload />}</div>
+              {dests.some(s => s !== "link") && (
+                curFile ? (
+                  <div className="dropzone">
+                    <div className="dz-ic">{reading ? <Ic.loader /> : <Ic.file />}</div>
                     <div className="dz-txt">
-                      <b>{reading ? "Leyendo datos…" : "Adjuntar EPUB (opcional)"}</b>
-                      <span>Solo para autocompletar título, autor y descripción. No se guardará; el libro queda en TeraBox.</span>
+                      <b>{curFileName}</b>
+                      <span>{reading ? "Leyendo datos del libro…" : (fmtSize(curFileSize) + " · " + (newFile ? "listo para guardar" : "ya guardado"))}</span>
+                    </div>
+                    <button type="button" className="icon-btn" onClick={() => { setNewFile(null); setRemoveFile(true); if(fileRef.current) fileRef.current.value=""; }} aria-label="Quitar archivo"><Ic.x /></button>
+                  </div>
+                ) : (
+                  <div className="dropzone" onClick={() => fileRef.current.click()} style={{cursor:"pointer"}}>
+                    <div className="dz-ic"><Ic.upload /></div>
+                    <div className="dz-txt">
+                      <b>Subir EPUB o PDF</b>
+                      <span>Se guardará en: {dests.filter(s => s !== "link").map(s => STORAGE_LABEL[s]).join(", ").toLowerCase()}</span>
                     </div>
                   </div>
-                </>
-              ) : curFile ? (
-                <div className="dropzone">
-                  <div className="dz-ic">{reading ? <Ic.loader /> : <Ic.file />}</div>
-                  <div className="dz-txt">
-                    <b>{curFileName}</b>
-                    <span>{reading ? "Leyendo datos del libro…" : (fmtSize(curFileSize) + " · " + (newFile ? "listo para guardar" : ("en " + (STORAGE_LABEL[b.file.storage] || "este dispositivo"))))}</span>
-                  </div>
-                  <button type="button" className="icon-btn" onClick={() => { setNewFile(null); setRemoveFile(true); if(fileRef.current) fileRef.current.value=""; }} aria-label="Quitar archivo"><Ic.x /></button>
-                </div>
-              ) : (
-                <div className="dropzone" onClick={() => fileRef.current.click()} style={{cursor:"pointer"}}>
-                  <div className="dz-ic"><Ic.upload /></div>
-                  <div className="dz-txt">
-                    <b>Subir EPUB o PDF</b>
-                    <span>Se guardará en {STORAGE_LABEL[dest].toLowerCase()}</span>
-                  </div>
+                )
+              )}
+
+              {dests.includes("link") && (
+                <div style={{marginTop:12}}>
+                  <label className="lbl">Enlace del libro (TeraBox, Telegram, Drive público…)</label>
+                  <input className="inp" value={linkUrl} onChange={e => setLinkUrl(e.target.value)} placeholder="https://…" style={{marginBottom:8}} />
+                  <p className="muted" style={{fontSize:12, lineHeight:1.5}}>
+                    Sube el libro a TeraBox, a un canal de Telegram, etc., copia el enlace para compartir y pégalo aquí. La app lo guarda y lo abre cuando lo necesites.
+                  </p>
                 </div>
               )}
 
-              <div style={{marginTop:12}}>
-                <label className="lbl">¿Dónde guardar este libro?</label>
-                <div className="seg">
-                  <button type="button" className={dest === "local" ? "on" : ""} onClick={() => setDest("local")}>
-                    <Ic.file s={15}/> Este dispositivo
-                  </button>
-                  <button type="button" className={dest === "drive" ? "on" : ""} onClick={() => driveEnabled ? setDest("drive") : toast("Conéctate a Google Drive en Ajustes", "err")} disabled={!driveEnabled}>
-                    <Ic.cloud s={15}/> Google Drive
-                  </button>
-                  <button type="button" className={dest === "dropbox" ? "on" : ""} onClick={() => dropboxEnabled ? setDest("dropbox") : toast("Conéctate a Dropbox en Ajustes", "err")} disabled={!dropboxEnabled}>
-                    <Ic.cloud s={15}/> Dropbox
-                  </button>
-                  <button type="button" className={dest === "link" ? "on" : ""} onClick={() => setDest("link")}>
-                    <Ic.open s={15}/> TeraBox / enlace
-                  </button>
-                </div>
-                {dest === "link" && (
-                  <p className="muted" style={{fontSize:12, marginTop:8, lineHeight:1.5}}>
-                    Sube el libro a TeraBox desde su app o web, copia el enlace para compartir y pégalo arriba. La app lo guarda y lo abre cuando lo necesites.
-                  </p>
-                )}
-              </div>
+              {!dests.some(s => s !== "link") && !dests.includes("link") && (
+                <p className="muted" style={{fontSize:12}}>Selecciona al menos un destino arriba.</p>
+              )}
             </div>
           </div>
         </div>
@@ -1390,9 +1581,41 @@ function BookForm({ initial, driveEnabled, dropboxEnabled, defaultStorage, aiEna
 /* ============================================================
    DETALLE del libro
    ============================================================ */
-function BookDetail({ book, onClose, onEdit, onDelete, onRead, toast }) {
+function BookDetail({ book, onClose, onEdit, onDelete, onRead, onUpdate, onCopy, onRemoveLocation, migrating, driveConnected, dropboxConnected, telegramConnected, toast }) {
   const [busy, setBusy] = useState(false);
-  const fmt = book.file ? fmtOf(book.file) : "";
+  const [progInput, setProgInput] = useState(book.progress != null ? String(book.progress) : "");
+  const [progUnit, setProgUnit] = useState("percent");
+  const locs = getFiles(book);
+  const linkLoc = locs.find(f => f.storage === "link");
+  const fetchable = locs.filter(f => f.storage !== "link");
+  const primary = fetchable[0] || locs[0] || null;
+  const fmt = primary ? fmtOf(primary) : "";
+
+  function applyProgress() {
+    let percent, page;
+    const n = parseInt((progInput || "").replace(/\D/g, "") || "0", 10);
+    if (progUnit === "page" && book.pages) { page = n; percent = Math.round((n / parseInt(book.pages, 10)) * 100); }
+    else { percent = n; if (book.pages) page = Math.round((n / 100) * parseInt(book.pages, 10)); }
+    percent = Math.max(0, Math.min(100, percent));
+    const status = percent >= 100 ? "read" : (percent > 0 ? "reading" : (book.status === "read" ? "read" : "unread"));
+    const log = (Array.isArray(book.readingLog) ? book.readingLog.slice(-40) : []);
+    log.push({ at: Date.now(), progress: percent });
+    onUpdate({ ...book, progress: percent, currentPage: page != null ? page : book.currentPage, status,
+      startedAt: book.startedAt || (percent > 0 ? Date.now() : undefined),
+      finishedAt: percent >= 100 ? (book.finishedAt || Date.now()) : undefined,
+      readingLog: log, dateModified: Date.now() });
+    toast("Progreso actualizado", "ok");
+  }
+
+  function quickStatus(s) {
+    onUpdate({ ...book, status: s,
+      progress: s === "read" ? 100 : (s === "unread" ? 0 : (book.progress || 0)),
+      finishedAt: s === "read" ? (book.finishedAt || Date.now()) : undefined,
+      startedAt: (s === "reading" || s === "read") ? (book.startedAt || Date.now()) : book.startedAt,
+      dateModified: Date.now() });
+    if (s === "read") setProgInput("100");
+    if (s === "unread") setProgInput("0");
+  }
 
   async function openFile() {
     if (!book.file) return;
@@ -1444,8 +1667,9 @@ function BookDetail({ book, onClose, onEdit, onDelete, onRead, toast }) {
             </div>
             <div className="detail-main">
               <h1>{book.title}</h1>
-              <div className="by">{book.author || "Autor desconocido"}{book.status === "unread"
-                ? <span className="chip badge-unread" style={{marginLeft:10, verticalAlign:"middle"}}>Por leer</span>
+              <div className="by">{book.author || "Autor desconocido"}{
+                book.status === "unread" ? <span className="chip badge-unread" style={{marginLeft:10, verticalAlign:"middle"}}>Por leer</span>
+                : book.status === "reading" ? <span className="chip chip-accent" style={{marginLeft:10, verticalAlign:"middle"}}>Leyendo</span>
                 : <span className="chip chip-accent" style={{marginLeft:10, verticalAlign:"middle"}}>Leído</span>}</div>
               {book.rating ? <Stars value={book.rating} size={20} /> : <span className="muted">Sin calificación</span>}
 
@@ -1455,14 +1679,7 @@ function BookDetail({ book, onClose, onEdit, onDelete, onRead, toast }) {
                 ))}
               </div>
 
-              {book.file && book.file.storage === "link" ? (
-                <div style={{display:"flex", gap:9, flexWrap:"wrap", marginTop:4}}>
-                  <button className="btn btn-primary btn-sm" onClick={() => window.open(book.file.url, "_blank", "noopener")}>
-                    <Ic.open s={16}/> Abrir enlace{fmt ? " (" + fmt + ")" : ""}
-                  </button>
-                  <span className="chip" style={{alignSelf:"center"}}>TeraBox / enlace</span>
-                </div>
-              ) : book.file && (
+              {(fetchable.length > 0) ? (
                 <div style={{display:"flex", gap:9, flexWrap:"wrap", marginTop:4}}>
                   {fmt === "EPUB" ? (
                     <button className="btn btn-primary btn-sm" onClick={() => onRead(book)}>
@@ -1481,13 +1698,81 @@ function BookDetail({ book, onClose, onEdit, onDelete, onRead, toast }) {
                   <button className="btn btn-ghost btn-sm" onClick={downloadFile} disabled={busy}>
                     <Ic.download s={16}/> Descargar
                   </button>
-                  <span className="chip" style={{alignSelf:"center"}}>
-                    {(STORAGE_LABEL[book.file.storage] || "En este dispositivo")} · {fmtSize(book.file.fileSize)}
-                  </span>
+                  {linkLoc && (
+                    <button className="btn btn-ghost btn-sm" onClick={() => window.open(linkLoc.url, "_blank", "noopener")}>
+                      <Ic.open s={16}/> Abrir enlace
+                    </button>
+                  )}
+                </div>
+              ) : linkLoc ? (
+                <div style={{display:"flex", gap:9, flexWrap:"wrap", marginTop:4}}>
+                  <button className="btn btn-primary btn-sm" onClick={() => window.open(linkLoc.url, "_blank", "noopener")}>
+                    <Ic.open s={16}/> Abrir enlace{fmt ? " (" + fmt + ")" : ""}
+                  </button>
+                </div>
+              ) : null}
+
+              {locs.length > 0 && (
+                <div style={{display:"flex", gap:7, flexWrap:"wrap", marginTop:10}}>
+                  {locs.map((f, i) => (
+                    <span key={i} className="chip" style={{fontSize:11.5}}>
+                      {STORAGE_LABEL[f.storage] || "En este dispositivo"}{f.fileSize ? " · " + fmtSize(f.fileSize) : ""}
+                    </span>
+                  ))}
                 </div>
               )}
             </div>
           </div>
+
+          <div className="review" style={{marginTop:16}}>
+            <div className="k">Progreso de lectura</div>
+            <div style={{display:"flex", alignItems:"center", gap:11, marginBottom:12}}>
+              <div className="reader-progress" style={{flex:1, height:8}}><div style={{width:(book.progress||0)+"%"}}></div></div>
+              <b style={{fontFamily:"var(--serif)", fontSize:17, minWidth:44, textAlign:"right"}}>{book.progress || 0}%</b>
+            </div>
+            {book.pages && book.progress ? (
+              <p className="muted" style={{fontSize:12.5, margin:"0 0 12px"}}>Vas por la página ~{Math.round((book.progress/100)*parseInt(book.pages,10))} de {book.pages}.</p>
+            ) : null}
+            <div style={{display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginBottom:12}}>
+              <input className="inp" style={{maxWidth:100}} value={progInput} inputMode="numeric"
+                onChange={e => setProgInput(e.target.value.replace(/\D/g,""))} placeholder={progUnit === "page" ? "página" : "%"} />
+              <div className="seg">
+                <button type="button" className={progUnit === "percent" ? "on" : ""} onClick={() => setProgUnit("percent")}>%</button>
+                <button type="button" className={progUnit === "page" ? "on" : ""} onClick={() => setProgUnit("page")} disabled={!book.pages}>página</button>
+              </div>
+              <button className="btn btn-primary btn-sm" onClick={applyProgress}><Ic.check s={15}/> Actualizar</button>
+            </div>
+            <div className="seg">
+              <button type="button" className={book.status === "unread" ? "on" : ""} onClick={() => quickStatus("unread")}>Por leer</button>
+              <button type="button" className={book.status === "reading" ? "on" : ""} onClick={() => quickStatus("reading")}>Leyendo</button>
+              <button type="button" className={(book.status === "read" || !book.status) ? "on" : ""} onClick={() => quickStatus("read")}>Leído</button>
+            </div>
+          </div>
+
+          {fetchable.length > 0 && (
+            <div className="review" style={{marginTop:14}}>
+              <div className="k">Guardar también en otro almacenamiento</div>
+              <div className="seg seg-multi" style={{marginTop:2, flexWrap:"wrap"}}>
+                <button type="button" onClick={() => onCopy(book, "local")} disabled={migrating || locs.some(f => f.storage === "local")}><Ic.file s={15}/> Este dispositivo</button>
+                <button type="button" onClick={() => onCopy(book, "drive")} disabled={migrating || locs.some(f => f.storage === "drive") || !driveConnected}><Ic.cloud s={15}/> Drive</button>
+                <button type="button" onClick={() => onCopy(book, "dropbox")} disabled={migrating || locs.some(f => f.storage === "dropbox") || !dropboxConnected}><Ic.cloud s={15}/> Dropbox</button>
+                <button type="button" onClick={() => onCopy(book, "telegram")} disabled={migrating || locs.some(f => f.storage === "telegram") || !telegramConnected}><Ic.send s={15}/> Telegram</button>
+              </div>
+              {locs.length > 1 && (
+                <div style={{marginTop:12}}>
+                  <div className="k" style={{marginBottom:6}}>Quitar de una ubicación</div>
+                  <div style={{display:"flex", gap:7, flexWrap:"wrap"}}>
+                    {locs.filter(f => f.storage !== "link").map((f, i) => (
+                      <button key={i} type="button" className="btn btn-ghost btn-sm" onClick={() => onRemoveLocation(book, f.storage)} disabled={migrating}>
+                        <Ic.x s={14}/> {STORAGE_LABEL[f.storage]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {migrating && <p className="muted" style={{fontSize:12.5, margin:"10px 0 0", display:"flex", alignItems:"center", gap:7}}><Ic.loader s={14}/> Procesando el archivo…</p>}
+            </div>
+          )}
 
           {book.synopsis && (
             <div className="review">
@@ -1517,6 +1802,7 @@ function BookDetail({ book, onClose, onEdit, onDelete, onRead, toast }) {
    ============================================================ */
 function Settings({ clientId, setClientId, driveConnected, connectDrive, disconnectDrive,
                     dropboxKey, setDropboxKey, dropboxConnected, connectDropbox, disconnectDropbox,
+                    tgWorker, tgToken, tgChat, telegramConnected, saveTelegram, testTelegram, disconnectTelegram,
                     defaultStorage, setDefaultStorage,
                     aiKey, setAiKey,
                     onExport, onImport, onClose, exporting, importing,
@@ -1524,6 +1810,9 @@ function Settings({ clientId, setClientId, driveConnected, connectDrive, disconn
   const [cid, setCid] = useState(clientId);
   const [dbx, setDbx] = useState(dropboxKey);
   const [aik, setAik] = useState(aiKey);
+  const [tgW, setTgW] = useState(tgWorker || "");
+  const [tgT, setTgT] = useState(tgToken || "");
+  const [tgC, setTgC] = useState(tgChat || "");
   const importRef = useRef();
   const lastTxt = lastSync ? new Date(lastSync).toLocaleString("es", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" }) : null;
   const redirectUri = location.origin + location.pathname;
@@ -1544,7 +1833,8 @@ function Settings({ clientId, setClientId, driveConnected, connectDrive, disconn
               <button className={defaultStorage === "local" ? "on" : ""} onClick={() => setDefaultStorage("local")}><Ic.file s={15}/> Este dispositivo</button>
               <button className={defaultStorage === "drive" ? "on" : ""} onClick={() => driveConnected ? setDefaultStorage("drive") : null} disabled={!driveConnected}><Ic.cloud s={15}/> Google Drive</button>
               <button className={defaultStorage === "dropbox" ? "on" : ""} onClick={() => dropboxConnected ? setDefaultStorage("dropbox") : null} disabled={!dropboxConnected}><Ic.cloud s={15}/> Dropbox</button>
-              <button className={defaultStorage === "link" ? "on" : ""} onClick={() => setDefaultStorage("link")}><Ic.open s={15}/> TeraBox / enlace</button>
+              <button className={defaultStorage === "telegram" ? "on" : ""} onClick={() => telegramConnected ? setDefaultStorage("telegram") : null} disabled={!telegramConnected}><Ic.send s={15}/> Telegram</button>
+              <button className={defaultStorage === "link" ? "on" : ""} onClick={() => setDefaultStorage("link")}><Ic.open s={15}/> Enlace externo</button>
             </div>
           </div>
 
@@ -1589,6 +1879,36 @@ function Settings({ clientId, setClientId, driveConnected, connectDrive, disconn
             <p className="muted" style={{fontSize:12, marginTop:12, lineHeight:1.5}}>
               En la configuración de tu app de Dropbox agrega esta Redirect URI exacta:<br/>
               <span style={{color:"var(--ink-soft)", wordBreak:"break-all"}}>{redirectUri}</span>
+            </p>
+          </div>
+
+          <div className="set-block">
+            <h3><Ic.send s={18}/> Telegram</h3>
+            <p className="desc">Guarda los libros en un canal de Telegram (hasta 50 MB por archivo). Necesita un pequeño «Worker» gratuito de Cloudflare como puente; sigue las instrucciones del archivo telegram-worker.js. Pasos: 1) crea un bot con @BotFather y copia su token; 2) crea un canal y añade el bot como administrador; 3) publica el Worker y pega su URL aquí; 4) pon el chat_id del canal (ej. @micanal o -100…).</p>
+            <label className="lbl">URL del Worker de Cloudflare</label>
+            <input className="inp" value={tgW} onChange={e => setTgW(e.target.value.trim())}
+                   placeholder="https://biblioteca-telegram.tucuenta.workers.dev" style={{marginBottom:10}} />
+            <label className="lbl">Token del bot (@BotFather)</label>
+            <input className="inp" type="password" value={tgT} onChange={e => setTgT(e.target.value.trim())}
+                   placeholder="123456789:ABC-DEF..." style={{marginBottom:10}} />
+            <label className="lbl">Canal (chat_id)</label>
+            <input className="inp" value={tgC} onChange={e => setTgC(e.target.value.trim())}
+                   placeholder="@micanal  o  -1001234567890" style={{marginBottom:12}} />
+            <div style={{display:"flex", gap:8, flexWrap:"wrap", marginBottom:14}}>
+              <button className="btn btn-ghost btn-sm" onClick={() => saveTelegram(tgW, tgT, tgC)}>Guardar datos</button>
+              <button className="btn btn-primary btn-sm" onClick={testTelegram} disabled={!tgW || !tgT || !tgC}><Ic.send s={15}/> Probar conexión</button>
+            </div>
+            <div className="drive-status">
+              <span className={"dot " + (telegramConnected ? "on" : "off")}></span>
+              {telegramConnected ? "Telegram conectado" : ((tgW && tgT && tgC) ? "Sin probar — pulsa «Probar conexión»" : "Faltan datos")}
+            </div>
+            {telegramConnected && (
+              <div style={{display:"flex", gap:8, flexWrap:"wrap"}}>
+                <button className="btn btn-ghost btn-sm" onClick={disconnectTelegram}>Borrar datos de Telegram</button>
+              </div>
+            )}
+            <p className="muted" style={{fontSize:12, marginTop:12, lineHeight:1.5}}>
+              Nota: para obtener el chat_id de un canal privado, reenvía un mensaje del canal al bot @userinfobot o usa @getidsbot. Para canales públicos basta con @nombre.
             </p>
           </div>
 
@@ -1799,6 +2119,97 @@ function EpubReader({ book, onClose, onSaveCfi, toast }) {
 }
 
 /* ============================================================
+   ESTADÍSTICAS DE LECTURA (tipo Goodreads)
+   ============================================================ */
+function ReadingStats({ books, onClose }) {
+  const s = useMemo(() => {
+    const read = books.filter(b => (b.status || "read") === "read");
+    const reading = books.filter(b => b.status === "reading");
+    const unread = books.filter(b => b.status === "unread");
+    const pagesRead = books.reduce((acc, b) => {
+      const pg = parseInt(b.pages, 10);
+      if (!pg) return acc;
+      if ((b.status || "read") === "read") return acc + pg;
+      if (b.status === "reading") return acc + Math.round(((b.progress || 0) / 100) * pg);
+      return acc;
+    }, 0);
+    const rated = books.filter(b => b.rating);
+    const avg = rated.length ? (rated.reduce((a, b) => a + b.rating, 0) / rated.length) : 0;
+    const now = new Date(), year = now.getFullYear();
+    const finishDate = (b) => b.finishedAt ? new Date(b.finishedAt) : (b.readDate ? new Date(b.readDate + "T00:00:00") : null);
+    const readThisYear = read.filter(b => { const d = finishDate(b); return d && d.getFullYear() === year; }).length;
+    // Últimos 12 meses
+    const months = [];
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      months.push({ key: d.getFullYear() + "-" + d.getMonth(), label: d.toLocaleDateString("es", { month: "short" }), count: 0 });
+    }
+    const idx = {}; months.forEach((m, i) => idx[m.key] = i);
+    read.forEach(b => { const d = finishDate(b); if (d) { const k = d.getFullYear() + "-" + d.getMonth(); if (idx[k] != null) months[idx[k]].count++; } });
+    const maxM = Math.max(1, ...months.map(m => m.count));
+    // Géneros más leídos
+    const gc = {};
+    read.forEach(b => { if (b.genre) gc[b.genre] = (gc[b.genre] || 0) + 1; });
+    const topGenres = Object.entries(gc).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    const maxG = Math.max(1, ...topGenres.map(g => g[1]));
+    return { read: read.length, reading: reading.length, unread: unread.length, pagesRead, avg, readThisYear, months, maxM, topGenres, maxG };
+  }, [books]);
+
+  return (
+    <div className="backdrop" onClick={onClose}>
+      <div className="modal modal-lg" onClick={e => e.stopPropagation()}>
+        <div className="modal-head">
+          <h2><Ic.chart s={18}/> Estadísticas de lectura</h2>
+          <button className="icon-btn" onClick={onClose} aria-label="Cerrar"><Ic.x /></button>
+        </div>
+        <div className="modal-body">
+          <div className="stats" style={{gridTemplateColumns:"repeat(3,1fr)"}}>
+            <div className="stat"><b>{s.read}</b><span>Leídos en total</span></div>
+            <div className="stat"><b>{s.readThisYear}</b><span>Leídos este año</span></div>
+            <div className="stat"><b>{s.reading}</b><span>Leyendo ahora</span></div>
+            <div className="stat"><b>{s.pagesRead.toLocaleString("es")}</b><span>Páginas leídas</span></div>
+            <div className="stat"><b>{s.unread}</b><span>Por leer</span></div>
+            <div className="stat"><b>{s.avg ? s.avg.toFixed(1) : "—"}</b><span>Calificación media</span></div>
+          </div>
+
+          <div className="review" style={{marginTop:18}}>
+            <div className="k">Libros terminados por mes (últimos 12 meses)</div>
+            <div style={{display:"flex", alignItems:"flex-end", gap:6, height:130, marginTop:14}}>
+              {s.months.map((m, i) => (
+                <div key={i} style={{flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:6, minWidth:0}}>
+                  <div style={{fontSize:11, color:"var(--ink-soft)", height:14}}>{m.count || ""}</div>
+                  <div title={m.count + " libros"} style={{width:"100%", maxWidth:26, height:Math.round((m.count / s.maxM) * 84) + 2, borderRadius:"5px 5px 0 0", background:m.count ? "linear-gradient(to top,var(--accent),var(--accent-soft))" : "var(--surface-3)"}}></div>
+                  <div style={{fontSize:10, color:"var(--ink-faint)", whiteSpace:"nowrap"}}>{m.label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {s.topGenres.length > 0 && (
+            <div className="review" style={{marginTop:14}}>
+              <div className="k">Géneros más leídos</div>
+              <div style={{display:"flex", flexDirection:"column", gap:9, marginTop:12}}>
+                {s.topGenres.map(([g, c]) => (
+                  <div key={g} style={{display:"flex", alignItems:"center", gap:11}}>
+                    <span style={{fontSize:13, width:110, flex:"none", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{g}</span>
+                    <div className="reader-progress" style={{flex:1, height:9}}><div style={{width:Math.round((c / s.maxG) * 100) + "%"}}></div></div>
+                    <span className="muted" style={{fontSize:12, width:24, textAlign:"right"}}>{c}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <p className="muted" style={{fontSize:12.5, marginTop:16, lineHeight:1.5}}>
+            Las páginas leídas suman los libros marcados como leídos más el avance de los que estás leyendo. Actualiza tu progreso desde el detalle de cada libro.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
    APP principal
    ============================================================ */
 function App() {
@@ -1816,12 +2227,18 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [confirmDel, setConfirmDel] = useState(null);
   const [reader, setReader] = useState(null);
+  const [showStats, setShowStats] = useState(false);
+  const [migrating, setMigrating] = useState(false);
   const cfiTimer = useRef(null);
 
   const [clientId, setClientIdState] = useState(DRIVE_CLIENT_ID);
   const [driveConnected, setDriveConnected] = useState(false);
   const [dropboxKey, setDropboxKeyState] = useState("");
   const [dropboxConnected, setDropboxConnected] = useState(false);
+  const [tgWorker, setTgWorkerState] = useState("");
+  const [tgToken, setTgTokenState] = useState("");
+  const [tgChat, setTgChatState] = useState("");
+  const [telegramConnected, setTelegramConnected] = useState(false);
   const [defaultStorage, setDefaultStorageState] = useState("local");
   const [aiKey, setAiKeyState] = useState("");
   const [exporting, setExporting] = useState(false);
@@ -1848,10 +2265,11 @@ function App() {
       try {
         // Captura el token de Dropbox si venimos de su redirección (antes de cualquier otra cosa)
         const dbxBack = Dropbox.captureFromHash();
-        const [bks, cid, defStore, auto, tomb, last, dbxKey, savedAiKey] = await Promise.all([
+        const [bks, cid, defStore, auto, tomb, last, dbxKey, savedAiKey, tgW, tgT, tgC] = await Promise.all([
           DB.getAllBooks(), DB.getSetting("driveClientId"), DB.getSetting("defaultStorage"),
           DB.getSetting("autoSync"), DB.getSetting("tombstones"), DB.getSetting("lastSync"),
           DB.getSetting("dropboxAppKey"), DB.getSetting("aiKey"),
+          DB.getSetting("tgWorker"), DB.getSetting("tgToken"), DB.getSetting("tgChat"),
         ]);
         setBooks(bks || []);
         booksRef.current = bks || [];
@@ -1860,6 +2278,11 @@ function App() {
         if (defStore) setDefaultStorageState(defStore);
         if (dbxKey) { setDropboxKeyState(dbxKey); Dropbox.setKey(dbxKey); }
         if (savedAiKey) { setAiKeyState(savedAiKey); AI.setKey(savedAiKey); }
+        if (tgW || tgT || tgC) {
+          setTgWorkerState(tgW || ""); setTgTokenState(tgT || ""); setTgChatState(tgC || "");
+          Telegram.config(tgW || "", tgT || "", tgC || "");
+          if (Telegram.isConfigured()) setTelegramConnected(true);
+        }
         if (dbxBack) { setDropboxConnected(true); toast("Conectado a Dropbox", "ok"); }
         const useCid = (DRIVE_CLIENT_ID || cid || "").trim();
         if (useCid) {
@@ -1928,7 +2351,7 @@ function App() {
     setSyncing(true);
     try {
       if (!Drive.isConfigured()) Drive.init(clientId);
-      await Drive.getToken(opts.silent);
+      await Drive.getToken();
       setDriveConnected(true);
       const remote = await Drive.loadLibrary();
       const local = booksRef.current;
@@ -1953,7 +2376,7 @@ function App() {
     syncTimer.current = setTimeout(async () => {
       try {
         setSyncing(true);
-        await Drive.getToken(true);
+        await Drive.getToken();
         await Drive.saveLibrary(buildPayload(booksRef.current, tombRef.current));
         const now = Date.now(); setLastSync(now); await DB.setSetting("lastSync", now);
       } catch (e) { /* callado: reintenta en el próximo cambio o al reabrir */ }
@@ -1997,11 +2420,33 @@ function App() {
   }
   function disconnectDropbox() { Dropbox.clear(); setDropboxConnected(false); if (defaultStorage === "dropbox") setDefaultStorage("local"); toast("Sesión de Dropbox cerrada"); }
 
+  // --- Telegram ---
+  function saveTelegram(w, t, c) {
+    const W = (w || "").trim(), T = (t || "").trim(), C = (c || "").trim();
+    setTgWorkerState(W); setTgTokenState(T); setTgChatState(C);
+    DB.setSetting("tgWorker", W); DB.setSetting("tgToken", T); DB.setSetting("tgChat", C);
+    Telegram.config(W, T, C);
+    setTelegramConnected(false);
+  }
+  async function testTelegram() {
+    try {
+      Telegram.config(tgWorker, tgToken, tgChat);
+      const info = await Telegram.test();
+      setTelegramConnected(true);
+      toast("Telegram conectado: canal «" + (info.chat || "") + "»", "ok");
+    } catch (e) { setTelegramConnected(false); toast(e.message || "No se pudo conectar a Telegram", "err"); }
+  }
+  function disconnectTelegram() {
+    saveTelegram("", "", ""); setTelegramConnected(false);
+    if (defaultStorage === "telegram") setDefaultStorage("local");
+    toast("Datos de Telegram borrados");
+  }
+
   async function connectDrive() {
     try {
       if (!Drive.ready()) { toast("Google Drive solo funciona en la app publicada (no en la vista previa)", "err"); return; }
       if (!Drive.isConfigured()) Drive.init(clientId);
-      await Drive.getToken(false);
+      await Drive.connect();
       await Drive.ensureFolder();
       setDriveConnected(true);
       toast("Conectado a Google Drive", "ok");
@@ -2034,13 +2479,67 @@ function App() {
     }, 1800);
   }
 
+  // Persiste un libro (progreso, estado, etc.) a IndexedDB, estado y sincronización
+  async function persistBook(rec) {
+    try {
+      await DB.putBook(rec);
+      setBooks(prev => {
+        const i = prev.findIndex(x => x.id === rec.id);
+        let next;
+        if (i >= 0) { next = [...prev]; next[i] = rec; } else next = [rec, ...prev];
+        booksRef.current = next; return next;
+      });
+      if (detail && detail.id === rec.id) setDetail(rec);
+      scheduleSync();
+    } catch (e) { toast("No se pudo guardar el cambio", "err"); }
+  }
+
+  // Copia el libro a OTRO almacenamiento (conserva las ubicaciones que ya tenía)
+  async function copyToStorage(book, target) {
+    const files = getFiles(book);
+    if (!files.length) { toast("Este libro no tiene archivo para copiar", "err"); return; }
+    if (files.some(f => f.storage === target)) { toast("El libro ya está en " + (STORAGE_LABEL[target] || target), "err"); return; }
+    if (target === "drive" && !driveConnected) { toast("Conéctate a Google Drive en Ajustes", "err"); return; }
+    if (target === "dropbox" && !dropboxConnected) { toast("Conéctate a Dropbox en Ajustes", "err"); return; }
+    if (target === "telegram" && !telegramConnected) { toast("Configura Telegram en Ajustes", "err"); return; }
+    setMigrating(true);
+    try {
+      const blob = await getBookBlob(book);
+      const src = files[0];
+      const name = src.fileName || (book.title + ".epub");
+      const type = src.fileType || "application/octet-stream";
+      const common = { fileName: name, fileType: type, fileSize: blob.size };
+      let nf;
+      if (target === "drive") { const up = await Drive.upload(blob, name, type); nf = { storage: "drive", driveFileId: up.id, driveLink: up.webViewLink, ...common }; }
+      else if (target === "dropbox") { const up = await Dropbox.upload(blob, name); nf = { storage: "dropbox", dropboxId: up.dropboxId, dropboxPath: up.dropboxPath, ...common }; }
+      else if (target === "telegram") { const up = await Telegram.upload(blob, name); nf = { storage: "telegram", fileId: up.fileId, messageId: up.messageId, chatId: up.chatId, ...common }; }
+      else { await DB.putFile(book.id, blob); nf = { storage: "local", ...common }; }
+      const newFiles = [...files, nf];
+      await persistBook({ ...book, files: newFiles, file: newFiles[0], dateModified: Date.now() });
+      toast("Copia guardada en " + (STORAGE_LABEL[target] || target), "ok");
+    } catch (e) { toast(e.message || "No se pudo copiar el libro", "err"); }
+    finally { setMigrating(false); }
+  }
+
+  // Quita UNA ubicación del libro (borra ese archivo; conserva las demás)
+  async function removeBookLocation(book, storage) {
+    const files = getFiles(book);
+    const f = files.find(x => x.storage === storage);
+    if (!f) return;
+    if (files.length <= 1) { toast("Es la única ubicación. Usa Editar o Eliminar el libro.", "err"); return; }
+    setMigrating(true);
+    try {
+      await removeLocation(book.id, f);
+      const newFiles = files.filter(x => x.storage !== storage);
+      await persistBook({ ...book, files: newFiles, file: newFiles[0] || null, dateModified: Date.now() });
+      toast("Quitado de " + (STORAGE_LABEL[storage] || storage), "ok");
+    } catch (e) { toast(e.message || "No se pudo quitar la ubicación", "err"); }
+    finally { setMigrating(false); }
+  }
+
   async function reallyDelete(book) {
     try {
-      if (book.file) {
-        if (book.file.storage === "local") await DB.deleteFile(book.id);
-        else if (book.file.storage === "drive" && book.file.driveFileId) await Drive.remove(book.file.driveFileId);
-        else if (book.file.storage === "dropbox" && (book.file.dropboxPath || book.file.dropboxId)) await Dropbox.remove(book.file.dropboxPath || book.file.dropboxId);
-      }
+      for (const f of getFiles(book)) await removeLocation(book.id, f);
       await DB.deleteBook(book.id);
       tombRef.current = [...tombRef.current.filter(t => t.id !== book.id), { id: book.id, at: Date.now() }];
       await DB.setSetting("tombstones", tombRef.current);
@@ -2117,7 +2616,8 @@ function App() {
     const q = query.trim().toLowerCase();
     if (q) r = r.filter(b => (b.title + " " + b.author + " " + (b.genre||"")).toLowerCase().includes(q));
     if (genreF) r = r.filter(b => b.genre === genreF);
-    if (statusF === "read") r = r.filter(b => b.status !== "unread");
+    if (statusF === "read") r = r.filter(b => (b.status || "read") === "read");
+    if (statusF === "reading") r = r.filter(b => b.status === "reading");
     if (statusF === "unread") r = r.filter(b => b.status === "unread");
     const s = [...r];
     s.sort((a, b) => {
@@ -2126,24 +2626,27 @@ function App() {
       if (sort === "author") return (a.author||"").localeCompare(b.author||"", "es");
       if (sort === "rating") return (b.rating||0) - (a.rating||0);
       if (sort === "readDate") return (b.readDate||"").localeCompare(a.readDate||"");
+      if (sort === "progress") return (b.progress||0) - (a.progress||0);
       return 0;
     });
     return s;
   }, [books, query, genreF, statusF, sort]);
 
-  // Separa lo filtrado en por leer / leídos
+  // Separa lo filtrado en leyendo / por leer / leídos
   const groups = useMemo(() => ({
+    reading: filtered.filter(b => b.status === "reading"),
     unread: filtered.filter(b => b.status === "unread"),
-    read: filtered.filter(b => b.status !== "unread"),
+    read: filtered.filter(b => (b.status || "read") === "read"),
   }), [filtered]);
 
   const stats = useMemo(() => {
     const total = books.length;
     const unread = books.filter(b => b.status === "unread").length;
+    const reading = books.filter(b => b.status === "reading").length;
+    const read = books.filter(b => (b.status || "read") === "read").length;
     const rated = books.filter(b => b.rating);
     const avg = rated.length ? (rated.reduce((s,b) => s + b.rating, 0) / rated.length) : 0;
-    const genres = new Set(books.map(b => b.genre).filter(Boolean)).size;
-    return { total, read: total - unread, unread, avg, genres };
+    return { total, read, reading, unread, avg };
   }, [books]);
 
   const usedGenres = useMemo(() => {
@@ -2161,6 +2664,12 @@ function App() {
     ? <div className="grid">{arr.map(b => <BookCard key={b.id} book={b} onOpen={setDetail} />)}</div>
     : <div className="list">{arr.map(b => <BookRow key={b.id} book={b} onOpen={setDetail} />)}</div>;
 
+  const sectionDefs = [
+    { key: "reading", title: "Leyendo", ic: <Ic.book s={16}/>, bg: "var(--accent-dim)", color: "var(--accent)" },
+    { key: "unread", title: "Por leer", ic: <Ic.bookOpen s={16}/>, bg: "rgba(127,176,224,.14)", color: "#8fbce8" },
+    { key: "read", title: "Leídos", ic: <Ic.check s={16}/>, bg: "var(--accent-dim)", color: "var(--accent)" },
+  ];
+
   return (
     <>
       <header className="topbar">
@@ -2172,6 +2681,7 @@ function App() {
           </div>
         </div>
         <div className="topbar-spacer" />
+        <button className="icon-btn" onClick={() => setShowStats(true)} aria-label="Estadísticas de lectura" title="Estadísticas de lectura"><Ic.chart /></button>
         {autoSync && (
           <button className="icon-btn" onClick={() => syncFromDrive({ silent: false })} aria-label="Sincronizar" title={lastSync ? "Sincronizar ahora" : "Sincronizar"} disabled={syncing}>
             {syncing ? <Ic.loader /> : <Ic.cloud />}
@@ -2185,8 +2695,8 @@ function App() {
 
       <main className="wrap">
         <div className="stats">
-          <div className="stat"><b>{stats.total}</b><span>En tu biblioteca</span><div className="spark"><Ic.books s={52}/></div></div>
           <div className="stat"><b>{stats.read}</b><span>Leídos</span><div className="spark"><Ic.check s={50}/></div></div>
+          <div className="stat"><b>{stats.reading}</b><span>Leyendo</span><div className="spark"><Ic.book s={48}/></div></div>
           <div className="stat"><b>{stats.unread}</b><span>Por leer</span><div className="spark"><Ic.bookOpen s={48}/></div></div>
           <div className="stat"><b>{stats.avg ? stats.avg.toFixed(1) : "—"}</b><span>Calificación media</span><div className="spark"><Ic.star s={54} fill/></div></div>
         </div>
@@ -2199,8 +2709,9 @@ function App() {
             </div>
             <div className="seg" style={{padding:4}}>
               <button className={statusF === "all" ? "on" : ""} onClick={() => setStatusF("all")}>Todos</button>
-              <button className={statusF === "read" ? "on" : ""} onClick={() => setStatusF("read")}>Leídos</button>
+              <button className={statusF === "reading" ? "on" : ""} onClick={() => setStatusF("reading")}>Leyendo</button>
               <button className={statusF === "unread" ? "on" : ""} onClick={() => setStatusF("unread")}>Por leer</button>
+              <button className={statusF === "read" ? "on" : ""} onClick={() => setStatusF("read")}>Leídos</button>
             </div>
             <select className="field-select" value={genreF} onChange={e => setGenreF(e.target.value)}>
               <option value="">Todos los géneros</option>
@@ -2212,6 +2723,7 @@ function App() {
               <option value="author">Autor (A-Z)</option>
               <option value="rating">Mejor calificados</option>
               <option value="readDate">Leídos recientemente</option>
+              <option value="progress">Más avanzados</option>
             </select>
             <div className="view-toggle">
               <button className={view === "grid" ? "on" : ""} onClick={() => setView("grid")} aria-label="Cuadrícula"><Ic.grid /></button>
@@ -2224,7 +2736,7 @@ function App() {
           <div className="empty">
             <div className="em-ic"><Ic.books s={30} /></div>
             <h3>Tu biblioteca está vacía</h3>
-            <p>Registra tus libros, marca si ya los leíste o están por leer, guarda su portada y adjunta el EPUB o PDF. Todo queda en tu dispositivo y puedes respaldarlo cuando quieras.</p>
+            <p>Registra tus libros, marca si los leíste, están por leer o los estás leyendo, y ve actualizando tu progreso. Todo queda en tu dispositivo y puedes respaldarlo cuando quieras.</p>
             <button className="btn btn-primary" onClick={() => { setEditing(null); setShowForm(true); }}><Ic.plus s={18}/> Agregar mi primer libro</button>
           </div>
         ) : filtered.length === 0 ? (
@@ -2234,18 +2746,17 @@ function App() {
             <p>No hay libros que coincidan con tu búsqueda. Prueba con otro término o quita los filtros.</p>
             <button className="btn btn-ghost" onClick={() => { setQuery(""); setGenreF(""); setStatusF("all"); }}>Limpiar filtros</button>
           </div>
-        ) : (statusF === "all" && groups.unread.length > 0 && groups.read.length > 0) ? (
+        ) : (statusF === "all" && sectionDefs.filter(sd => groups[sd.key].length > 0).length > 1) ? (
           <>
-            <div className="section-head">
-              <div className="sh-ic" style={{background:"rgba(127,176,224,.14)", color:"#8fbce8"}}><Ic.bookOpen s={16}/></div>
-              <h2>Por leer</h2><span className="count">{groups.unread.length}</span><div className="line"/>
-            </div>
-            {renderCollection(groups.unread)}
-            <div className="section-head">
-              <div className="sh-ic" style={{background:"var(--accent-dim)", color:"var(--accent)"}}><Ic.check s={16}/></div>
-              <h2>Leídos</h2><span className="count">{groups.read.length}</span><div className="line"/>
-            </div>
-            {renderCollection(groups.read)}
+            {sectionDefs.filter(sd => groups[sd.key].length > 0).map(sd => (
+              <React.Fragment key={sd.key}>
+                <div className="section-head">
+                  <div className="sh-ic" style={{background:sd.bg, color:sd.color}}>{sd.ic}</div>
+                  <h2>{sd.title}</h2><span className="count">{groups[sd.key].length}</span><div className="line"/>
+                </div>
+                {renderCollection(groups[sd.key])}
+              </React.Fragment>
+            ))}
           </>
         ) : renderCollection(filtered)}
       </main>
@@ -2255,6 +2766,7 @@ function App() {
           initial={editing}
           driveEnabled={driveConnected}
           dropboxEnabled={dropboxConnected}
+          telegramEnabled={telegramConnected}
           defaultStorage={defaultStorage}
           aiEnabled={!!aiKey}
           onSave={upsertBook}
@@ -2270,8 +2782,19 @@ function App() {
           onEdit={(b) => { setEditing(b); setShowForm(true); }}
           onDelete={(b) => setConfirmDel(b)}
           onRead={(b) => setReader(b)}
+          onUpdate={persistBook}
+          onCopy={copyToStorage}
+          onRemoveLocation={removeBookLocation}
+          migrating={migrating}
+          driveConnected={driveConnected}
+          dropboxConnected={dropboxConnected}
+          telegramConnected={telegramConnected}
           toast={toast}
         />
+      )}
+
+      {showStats && (
+        <ReadingStats books={books} onClose={() => setShowStats(false)} />
       )}
 
       {reader && (
@@ -2299,6 +2822,8 @@ function App() {
           driveConnected={driveConnected} connectDrive={connectDrive} disconnectDrive={disconnectDrive}
           dropboxKey={dropboxKey} setDropboxKey={setDropboxKey}
           dropboxConnected={dropboxConnected} connectDropbox={connectDropbox} disconnectDropbox={disconnectDropbox}
+          tgWorker={tgWorker} tgToken={tgToken} tgChat={tgChat} telegramConnected={telegramConnected}
+          saveTelegram={saveTelegram} testTelegram={testTelegram} disconnectTelegram={disconnectTelegram}
           defaultStorage={defaultStorage} setDefaultStorage={setDefaultStorage}
           aiKey={aiKey} setAiKey={setAiKey}
           onExport={exportJSON} onImport={importJSON}
