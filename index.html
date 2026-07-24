@@ -408,28 +408,25 @@
   }
   @media (max-width:560px){
     .wrap{padding:16px 14px 90px;}
-    /* Fondo 100% sólido en móvil: sin degradados que el celular repinte al hacer scroll */
+    /* --- Perfil "plano" para móviles Xiaomi/MIUI ---
+       El navegador de estos equipos corrompe el dibujado (portadas y texto que se
+       repiten, ruido de colores) cuando la página promueve capas de GPU. Aquí
+       eliminamos TODO lo que dispara esa promoción: sin backdrop-filter, sin
+       transform/translateZ, sin contain, sin fondos con degradado, y la barra
+       superior deja de ser "pegajosa" (que también obliga a componer por GPU). */
     body::before{display:none;}
-    /* En móvil la barra fija con desenfoque translúcido causa "rayado tipo TV"
-       al pasar las portadas por detrás. La hacemos sólida y sin blur. */
     .topbar{
+      position:static;
       padding:12px 14px;
       background:var(--bg);
       -webkit-backdrop-filter:none;
       backdrop-filter:none;
-      transform:translateZ(0);
     }
-    /* Quitamos el desenfoque de TODO lo que va encima de las portadas. El
-       backdrop-filter obliga al navegador a "fotografiar" la portada de fondo,
-       y en los Xiaomi/MIUI esa foto se repite en mosaico sobre la imagen. */
     .cover-status,.fmt-badge,.drive-badge{-webkit-backdrop-filter:none;backdrop-filter:none;}
     .cover-status.unread{background:#14110E;}
     .cover-status.reading{background:#14110E;}
     .fmt-badge{background:#100E0B;}
     .drive-badge{background:#100E0B;}
-    /* Cada portada se dibuja en su propia capa, ya clipada: evita el mosaico al hacer scroll */
-    .cover{contain:paint;}
-    .cover img{transform:translateZ(0);-webkit-backface-visibility:hidden;backface-visibility:hidden;}
     .brand-txt span{display:none;}
     .grid{grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:13px;}
     .hide-sm{display:none;}
