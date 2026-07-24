@@ -174,6 +174,10 @@
     border-radius:var(--radius);overflow:hidden;cursor:pointer;
     transition:transform .18s cubic-bezier(.2,.7,.3,1), border-color .18s, box-shadow .18s;
     display:flex;flex-direction:column;
+    /* Solo dibuja las tarjetas visibles; las de fuera de pantalla no se pintan.
+       Reduce muchísimo la carga de imágenes a la vez (clave en móviles con GPU débil). */
+    content-visibility:auto;
+    contain-intrinsic-size:auto 330px;
   }
   .card:hover{transform:translateY(-4px);border-color:var(--line-strong);box-shadow:var(--shadow);}
   .cover{
@@ -212,6 +216,7 @@
   .row{
     display:flex;align-items:center;gap:14px;padding:11px 13px;
     background:var(--surface);border:1px solid var(--line);border-radius:12px;cursor:pointer;transition:.15s;
+    content-visibility:auto;contain-intrinsic-size:auto 88px;
   }
   .row:hover{border-color:var(--line-strong);background:var(--surface-2);}
   .row-cover{width:44px;height:64px;flex:none;border-radius:6px;overflow:hidden;background:var(--surface-2);position:relative;}
