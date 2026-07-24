@@ -419,10 +419,17 @@
       backdrop-filter:none;
       transform:translateZ(0);
     }
-    /* Quitamos el desenfoque de las etiquetas sobre las portadas (también se repinta al hacer scroll) */
-    .cover-status{-webkit-backdrop-filter:none;backdrop-filter:none;}
+    /* Quitamos el desenfoque de TODO lo que va encima de las portadas. El
+       backdrop-filter obliga al navegador a "fotografiar" la portada de fondo,
+       y en los Xiaomi/MIUI esa foto se repite en mosaico sobre la imagen. */
+    .cover-status,.fmt-badge,.drive-badge{-webkit-backdrop-filter:none;backdrop-filter:none;}
     .cover-status.unread{background:#14110E;}
     .cover-status.reading{background:#14110E;}
+    .fmt-badge{background:#100E0B;}
+    .drive-badge{background:#100E0B;}
+    /* Cada portada se dibuja en su propia capa, ya clipada: evita el mosaico al hacer scroll */
+    .cover{contain:paint;}
+    .cover img{transform:translateZ(0);-webkit-backface-visibility:hidden;backface-visibility:hidden;}
     .brand-txt span{display:none;}
     .grid{grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:13px;}
     .hide-sm{display:none;}
